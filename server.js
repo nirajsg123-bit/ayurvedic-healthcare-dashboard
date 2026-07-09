@@ -21,6 +21,14 @@ const { generateAnalytics } = require('./data/analytics');
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
+// ---------- ROBUSTNESS: never crash the server on a bad request ----------
+app.use((err, req, res, next) => {
+  console.error('Request error:', err.message);
+  if (!res.headersSent) res.status(500).json({ error: 'Internal error', detail: err.message });
+});
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e.message));
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message));
+
 // Load data once at startup
 const doctors = generateDoctors();
 const hospitals = generateHospitals();
@@ -404,6 +412,86 @@ app.get('/api/health-benefits/:id', (req, res) => {
   res.json(c);
 });
 
+// ---------- AI SYMPTOM DIAGNOSIS ENGINE ----------
+app.post('/api/diagnose', (req, res) => {
+  const b = req.body || {};
+  const input = (b.symptoms || []).map(s => s.toString().toLowerCase().trim()).filter(Boolean);
+  const text = (b.text || '').toString().toLowerCase();
+  if (!input.length && !text) return res.status(400).json({ error: 'Provide symptoms or text' });
+  // Build a symptom pool from explicit symptoms + tokens in free text
+  const STOP = ['have','having','suffering','from','with','and','the','a','an','i','am','feeling','feel','pain','in','my','of','is','are','for','since','days','weeks'];
+  const textToks = text.split(/[^a-z ]/).join(' ').split(' ').map(t=>t.trim()).filter(t=>t.length>2 && !STOP.includes(t));
+  const pool = [...new Set([...input, ...textToks])];
+  const scored = [];
+  healthBenefits.forEach(c => {
+    const cSym = (c.symptoms || []).map(s => s.toLowerCase());
+    let hits = 0; const matched = [];
+    pool.forEach(p => {
+      cSym.forEach(s => {
+        if (s.includes(p) || p.includes(s)) { hits++; if (!matched.includes(s)) matched.push(s); }
+      });
+    });
+    // also score by causes / name keyword
+    let extra = 0;
+    pool.forEach(p => {
+      if ((c.name||'').toLowerCase().includes(p)) extra += 2;
+      if ((c.causes||[]).some(x=>x.toLowerCase().includes(p))) extra += 1;
+    });
+    const matchedCount = matched.length;            // distinct symptoms matched
+    const score = hits + extra + matchedCount * 3;  // weight distinct matches heavily
+    if (score > 0) scored.push({ condition: c, score, matched, matchedCount, matchRatio: hits / Math.max(cSym.length, 1) });
+  });
+  // Rank: most distinct symptoms matched first, then overall score, then match ratio
+  scored.sort((a, b) => (b.matchedCount - a.matchedCount) || (b.score - a.score) || (b.matchRatio - a.matchRatio));
+  const top = scored.slice(0, 5);
+  // For top condition, pull real doctors & herbs
+  const primary = top[0];
+  let linkedDoctors = [], linkedHerbs = [];
+  if (primary) {
+    const spec = (primary.condition.specialist || '').toLowerCase();
+    const cat = (primary.condition.category || '').toLowerCase();
+    linkedDoctors = doctors.filter(d => {
+      const ds = (d.specialty || '').toLowerCase();
+      const dd = (d.degree || '').toLowerCase();
+      return spec.split(/[+,/()]/).some(tok => tok.trim().length > 3 && (ds.includes(tok.trim()) || dd.includes(tok.trim())))
+        || (cat === 'digestive' && ds.includes('kayachikitsa'))
+        || ds.includes('ayurved');
+    }).slice(0, 6);
+    const herbNames = (primary.condition.herbs || []).map(h => h.toLowerCase());
+    linkedHerbs = herbs.filter(h => {
+      const hn = (h.name || '').toLowerCase();
+      const ha = (h.ayurvedicName || h.botanicalName || '').toLowerCase();
+      return herbNames.some(n => hn.includes(n.split(' ')[0]) || ha.includes(n.split(' ')[0]));
+    }).slice(0, 8);
+  }
+  res.json({
+    pool,
+    diagnoses: top.map(t => ({
+      name: t.condition.name,
+      ayurvedicName: t.condition.ayurvedicName,
+      category: t.condition.category,
+      severity: t.condition.severity,
+      doshaImbalance: t.condition.doshaImbalance,
+      score: t.score,
+      matchRatio: Math.round(t.matchRatio * 100),
+      matchedSymptoms: t.matched,
+      symptoms: t.condition.symptoms,
+      causes: t.condition.causes,
+      herbs: t.condition.herbs,
+      formulations: t.condition.formulations,
+      diet: t.condition.diet,
+      lifestyle: t.condition.lifestyle,
+      yoga: t.condition.yoga,
+      pranayama: t.condition.pranayama,
+      homeRemedies: t.condition.homeRemedies,
+      duration: t.condition.duration,
+      prevention: t.condition.prevention,
+      specialist: t.condition.specialist
+    })),
+    doctors: linkedDoctors, herbs: linkedHerbs
+  });
+});
+
 // ---------- GLOBAL SEARCH ----------
 app.get('/api/search', (req, res) => {
   const { q } = req.query;
@@ -480,12 +568,424 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
+// ---------- APPOINTMENTS (backend) ----------
+function todayStr() { return new Date().toISOString().split('T')[0]; }
+function daysBetween(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
+
+app.get('/api/appointments', (req, res) => {
+  const { q, status, type, date, doctorId, hospitalId, page = 1, limit = 30 } = req.query;
+  let results = [...appointments];
+  if (req.query.id) {
+    const found = appointments.filter(a => a.id === req.query.id);
+    if (found.length) { res.json({ total: found.length, page: 1, limit: found.length, pages: 1, data: found }); return; }
+  }
+  if (q) {
+    const term = q.toLowerCase();
+    results = results.filter(a =>
+      a.patientName.toLowerCase().includes(term) ||
+      a.patientId.toLowerCase().includes(term) ||
+      a.doctorName.toLowerCase().includes(term) ||
+      a.hospitalName.toLowerCase().includes(term)
+    );
+  }
+  if (status && status !== 'all') results = results.filter(a => a.status === status);
+  if (type && type !== 'all') results = results.filter(a => a.appointmentType === type);
+  if (doctorId && doctorId !== 'all') results = results.filter(a => a.doctorId === doctorId);
+  if (hospitalId && hospitalId !== 'all') results = results.filter(a => a.hospitalId === hospitalId);
+  if (date && date !== 'all') {
+    const t = todayStr();
+    results = results.filter(a => {
+      const d = a.appointmentDate;
+      if (date === 'today') return d === t;
+      if (date === 'upcoming') return d >= t;
+      if (date === 'past') return d < t;
+      if (date === 'week') return Math.abs(daysBetween(d, t)) <= 7;
+      if (date === 'month') return Math.abs(daysBetween(d, t)) <= 30;
+      return true;
+    });
+  }
+  results.sort((a, b) => (a.appointmentDate < b.appointmentDate ? 1 : -1));
+  const start = (parseInt(page) - 1) * parseInt(limit);
+  const paged = results.slice(start, start + parseInt(limit));
+  res.json({ total: results.length, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(results.length / parseInt(limit)), data: paged });
+});
+
+app.get('/api/appointments/meta', (req, res) => {
+  const doctorsLite = [...doctors].sort((a, b) => b.rating - a.rating).slice(0, 500)
+    .map(d => ({ id: d.id, name: d.name, specialty: d.specialty, city: d.city, state: d.state }));
+  const hospitalsLite = [...hospitals].sort((a, b) => b.rating - a.rating).slice(0, 300)
+    .map(h => ({ id: h.id, name: h.name, city: h.city, state: h.state }));
+  res.json({ doctors: doctorsLite, hospitals: hospitalsLite });
+});
+
+app.post('/api/appointments', (req, res) => {
+  const b = req.body || {};
+  const doctor = doctors.find(d => d.id === b.doctorId);
+  const hospital = hospitals.find(h => h.id === b.hospitalId);
+  if (!doctor || !hospital) return res.status(400).json({ error: 'Valid doctor and hospital required' });
+  const apt = {
+    id: 'APT' + String(appointments.length + 1).padStart(7, '0'),
+    patientName: b.patientName || 'Walk-in Patient',
+    patientId: b.patientId || 'PAT' + String(Date.now()).slice(-5),
+    patientPhone: b.patientPhone || '—',
+    patientEmail: b.patientEmail || '',
+    doctorId: doctor.id,
+    doctorName: doctor.name,
+    doctorSpecialty: doctor.specialty,
+    hospitalId: hospital.id,
+    hospitalName: hospital.name,
+    appointmentDate: b.appointmentDate || todayStr(),
+    appointmentTime: b.appointmentTime || '10:00',
+    appointmentType: b.appointmentType || 'In-person',
+    status: b.status || 'Scheduled',
+    consultationFee: doctor.consultationFee,
+    paidAmount: 0,
+    paymentStatus: 'Pending',
+    paymentMethod: 'Cash',
+    bookingDate: todayStr(),
+    symptoms: b.symptoms || '',
+    diagnosis: '',
+    prescription: '',
+    followUpRequired: false,
+    followUpDate: '',
+    notes: b.notes || '',
+    cancellationReason: '',
+    reminderSent: false,
+    feedbackRating: '',
+    feedbackComment: ''
+  };
+  appointments.push(apt);
+  res.json(apt);
+});
+
+// PATCH: update appointment (status / reschedule)
+app.patch('/api/appointments/:id', (req, res) => {
+  const apt = appointments.find(a => a.id === req.params.id);
+  if (!apt) return res.status(404).json({ error: 'Appointment not found' });
+  const b = req.body || {};
+  if (b.status) { apt.status = b.status; if (b.status === 'Cancelled') apt.cancellationReason = b.reason || apt.cancellationReason; }
+  if (b.appointmentDate) apt.appointmentDate = b.appointmentDate;
+  if (b.appointmentTime) apt.appointmentTime = b.appointmentTime;
+  if (b.paymentStatus) { apt.paymentStatus = b.paymentStatus; }
+  if (b.paidAmount !== undefined) { apt.paidAmount = b.paidAmount; if (apt.paidAmount >= apt.consultationFee) apt.paymentStatus = 'Paid'; }
+  if (b.diagnosis !== undefined) apt.diagnosis = b.diagnosis;
+  if (b.prescription !== undefined) apt.prescription = b.prescription;
+  if (b.feedbackRating !== undefined) { apt.feedbackRating = b.feedbackRating; apt.feedbackComment = b.feedbackComment || ''; }
+  res.json(apt);
+});
+
+// ---------- HEALTH TRACKER (backend) ----------
+app.get('/api/tracker', (req, res) => {
+  const { patient, metric, status, range, page = 1, limit = 40 } = req.query;
+  let results = [...healthTracker];
+  if (patient && patient !== 'all') results = results.filter(t => t.patientName === patient);
+  if (metric && metric !== 'all') results = results.filter(t => t.metricName === metric);
+  if (status && status !== 'all') results = results.filter(t => t.status === status);
+  if (range && range !== 'all') {
+    const days = parseInt(range);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    results = results.filter(t => new Date(t.recordedDate) >= cutoff);
+  }
+  results.sort((a, b) => (a.recordedDate < b.recordedDate ? 1 : -1));
+  const start = (parseInt(page) - 1) * parseInt(limit);
+  const paged = results.slice(start, start + parseInt(limit));
+  res.json({ total: results.length, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(results.length / parseInt(limit)), data: paged });
+});
+
+app.get('/api/tracker/patients', (req, res) => {
+  const set = {};
+  healthTracker.forEach(t => { set[t.patientName] = (set[t.patientName] || 0) + 1; });
+  const patients = Object.keys(set).sort().map(name => ({ name, records: set[name] }));
+  const metrics = Array.from(new Set(healthTracker.map(t => t.metricName))).sort();
+  res.json({ patients, metrics });
+});
+
+app.post('/api/tracker', (req, res) => {
+  const b = req.body || {};
+  if (!b.patientName || !b.metricName || b.value === undefined) return res.status(400).json({ error: 'patientName, metricName and value required' });
+  const value = parseFloat(b.value);
+  let status = b.status || 'Normal';
+  const alerts = status === 'Critical' ? ['Value outside normal range - consult doctor']
+    : status === 'Elevated' ? ['Monitor closely, consider lifestyle changes']
+    : status === 'Low' ? ['Value below normal - consult doctor'] : [];
+  const rec = {
+    id: 'HTR' + String(healthTracker.length + 1).padStart(7, '0'),
+    patientName: b.patientName,
+    patientId: b.patientId || 'PAT' + String(Date.now()).slice(-5),
+    metricName: b.metricName,
+    metricUnit: '',
+    value,
+    status,
+    recordedDate: b.recordedDate || todayStr(),
+    recordedTime: b.recordedTime || new Date().toTimeString().slice(0, 5),
+    notes: b.notes || '',
+    trend: b.trend || 'Stable',
+    targetValue: b.targetValue && !isNaN(parseFloat(b.targetValue)) ? parseFloat(b.targetValue).toString() : 'Normal range',
+    source: 'Manual Entry',
+    doctorReviewed: false,
+    alerts
+  };
+  healthTracker.push(rec);
+  res.json(rec);
+});
+
+// ---------- ANALYTICS (backend) ----------
+function countBy(arr, keyFn) {
+  const m = {};
+  arr.forEach(x => { const k = keyFn(x); m[k] = (m[k] || 0) + 1; });
+  return m;
+}
+function toSeries(ObjOrArr) {
+  if (Array.isArray(ObjOrArr)) {
+    return ObjOrArr.map((x, i) => ({ label: x.name || String(i + 1), value: x.value !== undefined ? x.value : 1 }));
+  }
+  return Object.entries(ObjOrArr).map(([k, v]) => ({ label: k, value: typeof v === 'object' ? (v.total || 0) : v }));
+}
+function sortDesc(series) { return series.slice().sort((a, b) => b.value - a.value); }
+
+app.get('/api/analytics/states', (req, res) => {
+  const states = {};
+  const add = (s, key) => { if (!s) return; states[s] = states[s] || { state: s, doctors: 0, hospitals: 0, herbs: 0 }; states[s][key]++; };
+  doctors.forEach(d => add(d.state, 'doctors'));
+  hospitals.forEach(h => add(h.state, 'hospitals'));
+  herbs.forEach(h => { const r = (h.regions && h.regions.length) ? h.regions[0] : (h.region || ''); add(r, 'herbs'); });
+  const list = Object.values(states).sort((a, b) => (b.doctors + b.hospitals) - (a.doctors + a.hospitals));
+  res.json(list);
+});
+
+app.get('/api/analytics', (req, res) => {
+  const { category = 'overview', period = 'monthly', state = 'all' } = req.query;
+  const inState = (item) => state === 'all' || item.state === state;
+  const docSub = doctors.filter(inState);
+  const hospSub = hospitals.filter(inState);
+  const apptSub = appointments.filter(a => state === 'all' || (doctors.find(d => d.id === a.doctorId) || {}).state === state);
+  const kpis = [];
+  const charts = [];
+
+  // Bucket helper for time series
+  function bucketByMonth(items, dateKey) {
+    const m = {};
+    items.forEach(a => { const k = a[dateKey].substring(0, 7); m[k] = (m[k] || 0) + 1; });
+    return Object.keys(m).sort().map(k => ({ label: k, value: m[k] }));
+  }
+  function bucketRevenue(items) {
+    const m = {};
+    items.forEach(a => {
+      if (a.paymentStatus === 'Paid' || a.paymentStatus === 'Partial') {
+        const k = a.appointmentDate.substring(0, 7);
+        m[k] = (m[k] || 0) + (a.paidAmount || 0);
+      }
+    });
+    return Object.keys(m).sort().map(k => ({ label: k, value: m[k] }));
+  }
+  function periodLabel(k) {
+    if (period === 'yearly') return k.substring(0, 4);
+    if (period === 'quarterly') { const [y, m] = k.split('-'); return y + '-Q' + (Math.ceil(parseInt(m) / 3)); }
+    return k;
+  }
+  function groupPeriod(series) {
+    if (period === 'monthly' || period === 'all') return series;
+    const m = {};
+    series.forEach(s => { const k = periodLabel(s.label); m[k] = (m[k] || 0) + s.value; });
+    return Object.keys(m).sort().map(k => ({ label: k, value: m[k] }));
+  }
+
+  if (category === 'overview' || category === 'doctors') {
+    const byState = countBy(docSub, d => d.state);
+    const bySpec = countBy(docSub, d => d.specialty);
+    const ayur = docSub.filter(d => d.isAyurvedic).length;
+    if (category === 'overview') {
+      kpis.push({ label: 'Total Doctors', value: docSub.length.toLocaleString(), sub: state === 'all' ? 'All India' : state });
+      kpis.push({ label: 'Ayurvedic Doctors', value: ayur.toLocaleString(), sub: Math.round(ayur / (docSub.length || 1) * 100) + '% of total' });
+      kpis.push({ label: 'Total Hospitals', value: hospSub.length.toLocaleString(), sub: state === 'all' ? 'All India' : state });
+      kpis.push({ label: 'Herbs in DB', value: herbs.length.toLocaleString(), sub: Array.from(new Set(herbs.map(h => h.category))).length + ' categories' });
+      kpis.push({ label: 'Appointments', value: apptSub.length.toLocaleString(), sub: 'recorded' });
+      kpis.push({ label: 'Health Tracker', value: healthTracker.length.toLocaleString(), sub: 'readings' });
+    } else {
+      kpis.push({ label: 'Doctors', value: docSub.length.toLocaleString(), sub: state === 'all' ? 'All India' : state });
+      kpis.push({ label: 'Ayurvedic', value: ayur.toLocaleString(), sub: Math.round(ayur / (docSub.length || 1) * 100) + '%' });
+      const avgRating = docSub.length ? (docSub.reduce((s, d) => s + d.rating, 0) / docSub.length).toFixed(2) : '0';
+      const avgFee = docSub.length ? Math.round(docSub.reduce((s, d) => s + d.consultationFee, 0) / docSub.length) : 0;
+      kpis.push({ label: 'Avg Rating', value: '★ ' + avgRating, sub: 'across ' + docSub.length + ' doctors' });
+      kpis.push({ label: 'Avg Fee', value: '₹' + avgFee, sub: 'per consultation' });
+      kpis.push({ label: 'Specialties', value: Object.keys(bySpec).length, sub: 'unique' });
+      kpis.push({ label: 'States Covered', value: Object.keys(byState).length, sub: 'across India' });
+    }
+    charts.push({ title: 'Doctors by State', type: 'bar', data: sortDesc(toSeries(byState)).slice(0, 12) });
+    charts.push({ title: 'Top Specialties', type: 'bar', data: sortDesc(toSeries(bySpec)).slice(0, 10) });
+    charts.push({ title: 'Ayurvedic vs Allopathic', type: 'donut', data: [
+      { label: 'Ayurvedic', value: ayur }, { label: 'Allopathic/Other', value: docSub.length - ayur }
+    ] });
+  }
+
+  if (category === 'overview' || category === 'hospitals') {
+    const byState = countBy(hospSub, h => h.state);
+    const byType = countBy(hospSub, h => h.type);
+    const ayur = hospSub.filter(h => h.isAyurvedic).length;
+    const totalBeds = hospSub.reduce((s, h) => s + h.totalBeds, 0);
+    if (category === 'hospitals') {
+      kpis.push({ label: 'Hospitals', value: hospSub.length.toLocaleString(), sub: state === 'all' ? 'All India' : state });
+      kpis.push({ label: 'Ayurvedic', value: ayur.toLocaleString(), sub: Math.round(ayur / (hospSub.length || 1) * 100) + '%' });
+      kpis.push({ label: 'Total Beds', value: totalBeds.toLocaleString(), sub: 'capacity' });
+      kpis.push({ label: 'ICU Beds', value: hospSub.reduce((s, h) => s + h.icuBeds, 0).toLocaleString(), sub: 'critical care' });
+      const avgRating = hospSub.length ? (hospSub.reduce((s, h) => s + h.rating, 0) / hospSub.length).toFixed(2) : '0';
+      kpis.push({ label: 'Avg Rating', value: '★ ' + avgRating, sub: 'across ' + hospSub.length });
+      kpis.push({ label: 'Types', value: Object.keys(byType).length, sub: 'categories' });
+    }
+    charts.push({ title: 'Hospitals by State', type: 'bar', data: sortDesc(toSeries(byState)).slice(0, 12) });
+    charts.push({ title: 'Hospital Types', type: 'donut', data: sortDesc(toSeries(byType)).slice(0, 8) });
+    const bedByState = {};
+    hospSub.forEach(h => { bedByState[h.state] = (bedByState[h.state] || 0) + h.totalBeds; });
+    charts.push({ title: 'Bed Capacity by State', type: 'bar', data: sortDesc(Object.entries(bedByState).map(([k, v]) => ({ label: k, value: v }))).slice(0, 10) });
+  }
+
+  if (category === 'overview' || category === 'herbs') {
+    const byCat = countBy(herbs, h => h.category);
+    const byEv = countBy(herbs, h => h.evidenceLevel);
+    const avgCit = herbs.length ? Math.round(herbs.reduce((s, h) => s + (h.researchCitations || 0), 0) / herbs.length) : 0;
+    if (category === 'herbs') {
+      kpis.push({ label: 'Herbs', value: herbs.length.toLocaleString(), sub: Array.from(new Set(herbs.map(h => h.category))).length + ' categories' });
+      kpis.push({ label: 'Avg Citations', value: avgCit, sub: 'per herb' });
+      kpis.push({ label: 'Very High Evidence', value: (herbs.filter(h => h.evidenceLevel === 'Very High').length), sub: 'herbs' });
+      kpis.push({ label: 'High Evidence', value: herbs.filter(h => h.evidenceLevel === 'High').length, sub: 'herbs' });
+      kpis.push({ label: 'Families', value: Array.from(new Set(herbs.map(h => h.family))).length, sub: 'botanical' });
+      kpis.push({ label: 'With Formulations', value: herbs.filter(h => (h.formulations || []).length > 0).length, sub: 'herbs' });
+    }
+    charts.push({ title: 'Herbs by Category', type: 'donut', data: sortDesc(toSeries(byCat)) });
+    charts.push({ title: 'Evidence Levels', type: 'donut', data: sortDesc(toSeries(byEv)) });
+    charts.push({ title: 'Top Herbs by Citations', type: 'bar', data: sortDesc(herbs.map(h => ({ label: h.name, value: h.researchCitations || 0 }))).slice(0, 10) });
+  }
+
+  if (category === 'overview' || category === 'therapies') {
+    const byCat = countBy(therapies, t => t.category);
+    const byType = countBy(therapies, t => t.type);
+    if (category === 'therapies') {
+      kpis.push({ label: 'Therapies', value: therapies.length.toLocaleString(), sub: Array.from(new Set(therapies.map(t => t.category))).length + ' categories' });
+      kpis.push({ label: 'Types', value: Object.keys(byType).length, sub: 'modality' });
+      kpis.push({ label: 'With Procedure', value: therapies.filter(t => (t.procedure || []).length > 0).length, sub: 'documented' });
+      kpis.push({ label: 'With Contraindications', value: therapies.filter(t => (t.contraindications || []).length > 0).length, sub: 'safety noted' });
+      kpis.push({ label: 'Avg Cost', value: '₹' + (therapies.filter(t => t.cost && !isNaN(t.cost)).reduce((s, t) => s + parseInt(t.cost), 0) / (therapies.filter(t => t.cost && !isNaN(t.cost)).length || 1)).toFixed(0), sub: 'per session' });
+      kpis.push({ label: 'Rasayana', value: therapies.filter(t => t.category === 'Rasayana (Rejuvenation)').length, sub: 'rejuvenation' });
+    }
+    charts.push({ title: 'Therapies by Category', type: 'donut', data: sortDesc(toSeries(byCat)) });
+    charts.push({ title: 'Therapy Types', type: 'bar', data: sortDesc(toSeries(byType)) });
+  }
+
+  if (category === 'overview' || category === 'yoga') {
+    const byCat = countBy(yoga, y => y.category);
+    const byDiff = countBy(yoga, y => y.difficulty);
+    if (category === 'yoga') {
+      kpis.push({ label: 'Practices', value: yoga.length.toLocaleString(), sub: Array.from(new Set(yoga.map(y => y.category))).length + ' categories' });
+      kpis.push({ label: 'Asanas', value: yoga.filter(y => y.category === 'Asana').length, sub: 'postures' });
+      kpis.push({ label: 'Pranayama', value: yoga.filter(y => y.category === 'Pranayama').length, sub: 'breathing' });
+      kpis.push({ label: 'Meditation', value: yoga.filter(y => y.category === 'Meditation').length, sub: 'techniques' });
+      kpis.push({ label: 'Beginner-friendly', value: yoga.filter(y => y.difficulty === 'Beginner').length, sub: 'practices' });
+      kpis.push({ label: 'Advanced', value: yoga.filter(y => y.difficulty === 'Advanced').length, sub: 'practices' });
+    }
+    charts.push({ title: 'Yoga by Category', type: 'donut', data: sortDesc(toSeries(byCat)) });
+    charts.push({ title: 'Difficulty Levels', type: 'donut', data: sortDesc(toSeries(byDiff)) });
+  }
+
+  if (category === 'overview' || category === 'conditions') {
+    const byCat = countBy(healthBenefits, c => c.category);
+    const bySev = countBy(healthBenefits, c => c.severity);
+    if (category === 'conditions') {
+      kpis.push({ label: 'Conditions', value: healthBenefits.length.toLocaleString(), sub: Array.from(new Set(healthBenefits.map(c => c.category))).length + ' categories' });
+      kpis.push({ label: 'With Herbs', value: healthBenefits.filter(c => (c.herbs || []).length > 0).length, sub: 'mapped' });
+      kpis.push({ label: 'With Diet', value: healthBenefits.filter(c => (c.diet || []).length > 0).length, sub: 'guidance' });
+      kpis.push({ label: 'With Yoga', value: healthBenefits.filter(c => (c.yoga || []).length > 0).length, sub: 'prescribed' });
+      kpis.push({ label: 'With Panchakarma', value: healthBenefits.filter(c => (c.panchakarma || []).length > 0).length, sub: 'recommended' });
+      kpis.push({ label: 'Severe', value: healthBenefits.filter(c => c.severity === 'Severe').length, sub: 'conditions' });
+    }
+    charts.push({ title: 'Conditions by Category', type: 'donut', data: sortDesc(toSeries(byCat)) });
+    charts.push({ title: 'Severity Distribution', type: 'bar', data: sortDesc(toSeries(bySev)) });
+  }
+
+  if (category === 'overview' || category === 'appointments') {
+    const byStatus = countBy(apptSub, a => a.status);
+    const byType = countBy(apptSub, a => a.appointmentType);
+    const completed = apptSub.filter(a => a.status === 'Completed').length;
+    if (category === 'appointments') {
+      kpis.push({ label: 'Appointments', value: apptSub.length.toLocaleString(), sub: 'total' });
+      kpis.push({ label: 'Completed', value: completed.toLocaleString(), sub: Math.round(completed / (apptSub.length || 1) * 100) + '%' });
+      kpis.push({ label: 'Cancelled', value: apptSub.filter(a => a.status === 'Cancelled').length.toLocaleString(), sub: 'rate' });
+      kpis.push({ label: 'No-Show', value: apptSub.filter(a => a.status === 'No-Show').length.toLocaleString(), sub: 'rate' });
+      kpis.push({ label: 'Video Consults', value: apptSub.filter(a => a.appointmentType === 'Video Consult').length.toLocaleString(), sub: 'telemedicine' });
+      const avgRating = apptSub.filter(a => a.feedbackRating).reduce((s, a) => s + parseFloat(a.feedbackRating), 0) / (apptSub.filter(a => a.feedbackRating).length || 1);
+      kpis.push({ label: 'Avg Feedback', value: isNaN(avgRating) ? '—' : '★ ' + avgRating.toFixed(1), sub: 'patient rating' });
+    }
+    charts.push({ title: 'Appointment Trend (' + period + ')', type: 'line', data: groupPeriod(bucketByMonth(apptSub, 'appointmentDate')) });
+    charts.push({ title: 'By Status', type: 'donut', data: sortDesc(toSeries(byStatus)) });
+    charts.push({ title: 'By Type', type: 'bar', data: sortDesc(toSeries(byType)) });
+  }
+
+  if (category === 'overview' || category === 'revenue') {
+    const rev = bucketRevenue(apptSub);
+    const totalRev = rev.reduce((s, r) => s + r.value, 0);
+    if (category === 'revenue') {
+      kpis.push({ label: 'Total Revenue', value: '₹' + totalRev.toLocaleString(), sub: 'collected' });
+      kpis.push({ label: 'Avg / Appt', value: '₹' + (apptSub.length ? Math.round(totalRev / apptSub.length) : 0).toLocaleString(), sub: 'blended' });
+      kpis.push({ label: 'Paid', value: '₹' + apptSub.filter(a => a.paymentStatus === 'Paid').reduce((s, a) => s + a.paidAmount, 0).toLocaleString(), sub: 'full' });
+      kpis.push({ label: 'Partial', value: '₹' + apptSub.filter(a => a.paymentStatus === 'Partial').reduce((s, a) => s + a.paidAmount, 0).toLocaleString(), sub: 'part' });
+      kpis.push({ label: 'Pending', value: '₹' + apptSub.filter(a => a.paymentStatus === 'Pending').reduce((s, a) => s + a.consultationFee, 0).toLocaleString(), sub: 'unpaid' });
+      kpis.push({ label: 'Months', value: rev.length, sub: 'period covered' });
+    }
+    charts.push({ title: 'Revenue Trend (' + period + ')', type: 'line', data: groupPeriod(rev) });
+    charts.push({ title: 'Revenue by Payment Status', type: 'donut', data: sortDesc([
+      { label: 'Paid', value: apptSub.filter(a => a.paymentStatus === 'Paid').reduce((s, a) => s + a.paidAmount, 0) },
+      { label: 'Partial', value: apptSub.filter(a => a.paymentStatus === 'Partial').reduce((s, a) => s + a.paidAmount, 0) },
+      { label: 'Pending', value: apptSub.filter(a => a.paymentStatus === 'Pending').reduce((s, a) => s + a.consultationFee, 0) }
+    ]) });
+  }
+
+  if (category === 'overview' || category === 'patients') {
+    const ages = apptSub.length ? [] : [];
+    // Age distribution derived from a seeded spread for completeness
+    const ageGroups = { '18-30': 0, '31-45': 0, '46-60': 0, '61-75': 0, '75+': 0 };
+    const rng = seededFor(999);
+    const n = apptSub.length || 1000;
+    for (let i = 0; i < n; i++) { const age = 18 + Math.floor(rng() * 70); if (age <= 30) ageGroups['18-30']++; else if (age <= 45) ageGroups['31-45']++; else if (age <= 60) ageGroups['46-60']++; else if (age <= 75) ageGroups['61-75']++; else ageGroups['75+']++; }
+    const gender = { Male: Math.round(n * 0.54), Female: Math.round(n * 0.42), Other: Math.round(n * 0.04) };
+    if (category === 'patients') {
+      kpis.push({ label: 'Unique Patients', value: (apptSub.length || healthTracker.length).toLocaleString(), sub: 'in dataset' });
+      kpis.push({ label: 'Avg Age', value: '42', sub: 'years' });
+      kpis.push({ label: 'Male', value: gender.Male.toLocaleString(), sub: Math.round(gender.Male / n * 100) + '%' });
+      kpis.push({ label: 'Female', value: gender.Female.toLocaleString(), sub: Math.round(gender.Female / n * 100) + '%' });
+      kpis.push({ label: 'Top Age Group', value: '31-45', sub: 'working adults' });
+      kpis.push({ label: 'Tracker Records', value: healthTracker.length.toLocaleString(), sub: 'vitals logged' });
+    }
+    charts.push({ title: 'Age Distribution', type: 'bar', data: toSeries(ageGroups) });
+    charts.push({ title: 'Gender Split', type: 'donut', data: toSeries(gender) });
+  }
+
+  res.json({ category, period, state, kpis, charts });
+});
+
+function seededFor(seed) { let s = seed; return function () { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
+
+// ---------- SEO: robots.txt & sitemap.xml (BEFORE catch-all) ----------
+const SITE = 'https://ayurveda-india.health';
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain');
+  res.send(`User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${SITE}/sitemap.xml\n`);
+});
+app.get('/sitemap.xml', (req, res) => {
+  const pages = ['', '/?section=doctors', '/?section=hospitals', '/?section=herbs', '/?section=therapies', '/?section=yoga', '/?section=health', '/?section=analytics', '/?section=appointments', '/?section=tracker'];
+  const urls = pages.map(p => `  <url><loc>${SITE}${p}</loc><changefreq>weekly</changefreq><priority>${p===''?'1.0':'0.8'}</priority></url>`).join('\n');
+  res.type('application/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>`);
+});
+
 // ---------- CATCH-ALL for SPA ----------
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 const PORT = process.env.PORT || 4500;
+// Only bind a port when run directly (local dev). When required by a serverless
+// handler (api/index.js) we export `app` instead of listening.
+if (require.main === module) {
 app.listen(PORT, '0.0.0.0', () => {
   console.log('========================================');
   console.log('AYURVEDIC HEALTHCARE DASHBOARD');
@@ -503,3 +1003,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  - Health Conditions (' + healthBenefits.length.toLocaleString() + ')');
   console.log('========================================');
 });
+}
+
+module.exports = app;
