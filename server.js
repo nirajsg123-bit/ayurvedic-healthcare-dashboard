@@ -29,8 +29,8 @@ app.use((err, req, res, next) => {
 process.on('uncaughtException', (e) => console.error('uncaughtException:', e.message));
 process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message));
 
-// Load data once at startup
-const doctors = generateDoctors();
+// Load data once at startup (doctors is mutable so real registrations append)
+let doctors = generateDoctors();
 const hospitals = generateHospitals();
 const herbs = generateInfiniteHerbs();
 const therapies = generateTherapies();
@@ -40,6 +40,30 @@ const appointments = generateAppointments();
 const healthTracker = generateHealthTracker();
 const favorites = generateFavorites();
 const analytics = generateAnalytics();
+
+// In-memory patient reviews per doctor (seeded with a few for generated doctors)
+const doctorReviews = new Map(); // doctorId -> [ {patient, rating, comment, date} ]
+doctors.forEach(d => {
+  const n = (d.id.charCodeAt(d.id.length - 1) + d.id.charCodeAt(d.id.length - 2)) % 4; // 0..3 deterministic
+  if (n > 0) {
+    const sampleComments = [
+      'Very knowledgeable and patient. Explained the Ayurvedic approach clearly.',
+      'Helped me a lot with my chronic issue. Highly recommended.',
+      'Good experience, the Panchakarma therapy was well managed.',
+      'Professional and caring. Follow-up was prompt.'
+    ];
+    const revs = [];
+    for (let i = 0; i < n; i++) {
+      revs.push({
+        patient: 'Patient ' + (1000 + (d.id.charCodeAt(3) + i * 37) % 9000),
+        rating: 4 + ((d.rating >= 4.5 ? 1 : 0)),
+        comment: sampleComments[(i + d.id.length) % sampleComments.length],
+        date: new Date(Date.now() - (i + 1) * 86400000 * 7).toISOString().slice(0, 10)
+      });
+    }
+    doctorReviews.set(d.id, revs);
+  }
+});
 
 console.log('Data loaded:');
 console.log('  Doctors:', doctors.length);
@@ -192,6 +216,68 @@ app.get('/api/doctors/:id', (req, res) => {
   if (!d) return res.status(404).json({ error: 'Doctor not found' });
   res.json(d);
 });
+
+// ---------- DOCTOR REGISTRATION (real doctors sign up) ----------
+app.post('/api/doctors/register', (req, res) => {
+  const b = req.body || {};
+  const required = ['name', 'specialty', 'degree', 'country', 'city', 'phone'];
+  const missing = required.filter(k => !b[k]);
+  if (missing.length) return res.status(400).json({ error: 'Missing required fields: ' + missing.join(', ') });
+  const id = 'DOC' + String(100000 + doctors.length).padStart(6, '0');
+  const newDoc = {
+    id,
+    name: b.name.startsWith('Dr') ? b.name : 'Dr. ' + b.name,
+    specialty: b.specialty,
+    degree: b.degree,
+    experience: parseInt(b.experience) || 0,
+    consultationFee: parseInt(b.fee) || 0,
+    rating: 0,
+    ratingCount: 0,
+    phone: b.phone,
+    email: b.email || '',
+    clinic: b.clinic || (b.name + ' Clinic'),
+    address: b.address || '',
+    city: b.city,
+    state: b.state || '',
+    country: b.country,
+    area: b.area || b.city,
+    languages: Array.isArray(b.languages) && b.languages.length ? b.languages : ['English'],
+    consultationModes: Array.isArray(b.consultationModes) && b.consultationModes.length ? b.consultationModes : ['In-person'],
+    availableDays: b.availableDays || 'Mon-Sat',
+    availableHours: b.availableHours || '9:00 AM - 6:00 PM',
+    isAyurvedic: /ayurved|panchakarma|yoga|naturopathy/i.test(b.specialty + ' ' + b.degree),
+    panchakarmaCertified: /panchakarma/i.test(b.specialty),
+    onlineBooking: true,
+    awards: null,
+    totalPatients: 0,
+    verified: false,
+    registeredAt: new Date().toISOString()
+  };
+  doctors.unshift(newDoc);
+  res.status(201).json({ success: true, doctor: newDoc });
+});
+
+// ---------- PATIENT REVIEWS ----------
+app.get('/api/doctors/:id/reviews', (req, res) => {
+  const list = doctorReviews.get(req.params.id) || [];
+  const d = doctors.find(x => x.id === req.params.id);
+  const avg = list.length ? (list.reduce((s, r) => s + r.rating, 0) / list.length) : (d ? d.rating : 0);
+  res.json({ reviews: list, average: avg.toFixed(1), count: list.length });
+});
+app.post('/api/doctors/:id/reviews', (req, res) => {
+  const d = doctors.find(x => x.id === req.params.id);
+  if (!d) return res.status(404).json({ error: 'Doctor not found' });
+  const { patient, rating, comment } = req.body || {};
+  if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'Rating must be 1-5' });
+  const list = doctorReviews.get(d.id) || [];
+  list.unshift({ patient: patient || 'Anonymous', rating: parseInt(rating), comment: comment || '', date: new Date().toISOString().slice(0, 10) });
+  doctorReviews.set(d.id, list);
+  // Recompute displayed rating
+  d.ratingCount = list.length;
+  d.rating = parseFloat((list.reduce((s, r) => s + r.rating, 0) / list.length).toFixed(1));
+  res.status(201).json({ success: true, reviews: list, average: d.rating, count: list.length });
+});
+
 
 // ---------- HOSPITALS ----------
 app.get('/api/hospitals', (req, res) => {

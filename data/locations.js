@@ -1,6 +1,9 @@
 // Comprehensive Indian states, districts, and cities for search filtering
 module.exports = {
-  countries: ['India'],
+  countries: ['India', 'United States', 'United Kingdom', 'Canada', 'Australia', 'United Arab Emirates',
+    'Singapore', 'Malaysia', 'Germany', 'France', 'Netherlands', 'Ireland', 'New Zealand',
+    'South Africa', 'Sri Lanka', 'Nepal', 'Bangladesh', 'Mauritius', 'Qatar', 'Saudi Arabia',
+    'Oman', 'Kuwait', 'Bahrain', 'Kenya', 'Nigeria', 'Switzerland', 'Italy', 'Spain', 'Portugal', 'Japan'],
   states: [
     'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
     'Delhi', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jammu and Kashmir',

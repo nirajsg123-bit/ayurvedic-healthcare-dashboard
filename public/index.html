@@ -712,8 +712,12 @@ body {
   <!-- DOCTORS SECTION -->
   <section id="section-doctors" class="section">
     <div class="search-panel">
-      <h2 class="search-title">🔍 Find Ayurvedic & Allopathic Doctors in India</h2>
-      <p class="section-desc">Search across 36 states & union territories, 700+ districts, and thousands of cities. Filter by specialty, mode of consultation, fee, and more.</p>
+      <h2 class="search-title">🔍 Find Verified Doctors Worldwide</h2>
+      <p class="section-desc">Search Ayurvedic, naturopathy and allopathic doctors across India and 30+ countries. Filter by specialty, language, teleconsult, fee, rating and location. Real patient reviews on every profile.</p>
+      <div class="filter-actions" style="margin-bottom:12px;">
+        <button class="btn btn-accent" onclick="openDoctorRegister()">➕ Register as a Doctor (Free)</button>
+        <button class="btn btn-secondary" onclick="scrollToDoctors()">🔎 Browse Doctors</button>
+      </div>
       <div class="filter-grid">
         <div class="filter-item">
           <label>Search by name, clinic, city</label>
@@ -2156,6 +2160,7 @@ async function showDetail(type, id) {
   title.textContent = data.name || data.english || '';
   body.innerHTML = renderDetail(type, data);
   modal.classList.add('active');
+  if (type === 'doctor') loadDoctorReviews(id);
 }
 function closeModal() {
   document.getElementById('modal').classList.remove('active');
@@ -2166,25 +2171,27 @@ document.getElementById('modal').addEventListener('click', (e) => {
 
 function renderDetail(type, d) {
   if (type === 'doctor') {
+    const verifiedBadge = d.verified ? '<span style="background:#16a34a;color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;margin-left:8px;">✔ Verified</span>' : '<span style="background:#f59e0b;color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;margin-left:8px;">⏳ Unverified</span>';
     return `
+      <div style="margin-bottom:6px;">${verifiedBadge}<span style="margin-left:8px;color:#16a34a;font-weight:700;">★ ${d.rating}${d.ratingCount ? ' ('+d.ratingCount+' reviews)' : ''}</span></div>
       <div class="info-grid">
         <div class="info-cell"><div class="info-label">Name</div><div class="info-value">${d.name}</div></div>
         <div class="info-cell"><div class="info-label">Specialty</div><div class="info-value">${d.specialty}</div></div>
         <div class="info-cell"><div class="info-label">Degree</div><div class="info-value">${d.degree}</div></div>
         <div class="info-cell"><div class="info-label">Experience</div><div class="info-value">${d.experience} years</div></div>
-        <div class="info-cell"><div class="info-label">Rating</div><div class="info-value">★ ${d.rating}</div></div>
-        <div class="info-cell"><div class="info-label">Fee</div><div class="info-value">₹${d.consultationFee}</div></div>
-        <div class="info-cell"><div class="info-label">Total Patients</div><div class="info-value">${d.totalPatients.toLocaleString()}+</div></div>
+        <div class="info-cell"><div class="info-label">Fee</div><div class="info-value">${d.consultationFee ? '₹' + d.consultationFee : 'Consult'}</div></div>
+        <div class="info-cell"><div class="info-label">Patients Treated</div><div class="info-value">${d.totalPatients ? d.totalPatients.toLocaleString() + '+' : 'New'}</div></div>
         <div class="info-cell"><div class="info-label">Languages</div><div class="info-value">${(d.languages || []).join(', ')}</div></div>
+        <div class="info-cell"><div class="info-label">Country</div><div class="info-value">${d.country}</div></div>
       </div>
       <div class="modal-section">
         <h3>📍 Location</h3>
-        <p>${d.address}</p>
+        <p>${d.address || (d.area + ', ' + d.city + ', ' + d.state + ', ' + d.country)}</p>
         <p><strong>${d.clinic}</strong></p>
       </div>
       <div class="modal-section">
         <h3>🕐 Availability</h3>
-        <p><strong>Days:</strong> ${(d.availableDays || []).join(', ')}</p>
+        <p><strong>Days:</strong> ${(d.availableDays || [])}</p>
         <p><strong>Hours:</strong> ${d.availableHours}</p>
         <p><strong>Modes:</strong> ${(d.consultationModes || []).join(', ')}</p>
         <p><strong>Online Booking:</strong> ${d.onlineBooking ? '✅ Available' : '❌ Not Available'}</p>
@@ -2192,15 +2199,128 @@ function renderDetail(type, d) {
       <div class="modal-section">
         <h3>📞 Contact</h3>
         <p><strong>Phone:</strong> <a href="tel:${d.phone}">${d.phone}</a></p>
-        <p><strong>Email:</strong> <a href="mailto:${d.email}">${d.email}</a></p>
+        ${d.email ? `<p><strong>Email:</strong> <a href="mailto:${d.email}">${d.email}</a></p>` : ''}
       </div>
       ${d.awards ? '<div class="modal-section"><h3>🏆 Awards</h3><p>' + d.awards + '</p></div>' : ''}
       ${d.panchakarmaCertified ? '<div class="modal-section"><h3>✨ Certification</h3><p>Panchakarma Certified</p></div>' : ''}
+      <div class="modal-section">
+        <h3>⭐ Patient Reviews</h3>
+        <div id="doctor-reviews" style="margin-bottom:12px;"><div style="color:#64748b;font-size:13px;">Loading reviews…</div></div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:8px;">
+          <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Write a review</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+            <input id="rev-name" placeholder="Your name (optional)" style="flex:1;min-width:140px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;">
+            <select id="rev-rating" style="padding:7px 10px;border:1px solid var(--border);border-radius:7px;">
+              <option value="5">★ 5 Excellent</option>
+              <option value="4">★ 4 Good</option>
+              <option value="3">★ 3 Average</option>
+              <option value="2">★ 2 Poor</option>
+              <option value="1">★ 1 Bad</option>
+            </select>
+          </div>
+          <textarea id="rev-comment" placeholder="Share your experience to help other patients…" style="width:100%;min-height:60px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;font-family:inherit;"></textarea>
+          <button class="btn btn-accent" style="margin-top:8px;font-size:13px;padding:8px 16px;" onclick="submitDoctorReview('${d.id}')">Submit Review</button>
+        </div>
+      </div>
       <div class="modal-section" style="text-align:center;padding-top:8px;">
         <button class="btn btn-accent" style="font-size:15px;padding:12px 26px;" onclick="bookDoctor('${d.id}')">📅 Book Appointment with ${d.name.split(' ').slice(-1)[0]}</button>
       </div>
     `;
   }
+// ---- Doctor reviews (real patient feedback) ----
+async function loadDoctorReviews(id) {
+  const box = document.getElementById('doctor-reviews');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/doctors/' + id + '/reviews');
+    const j = await r.json();
+    if (!j.reviews.length) { box.innerHTML = '<div style="color:#64748b;font-size:13px;">No reviews yet. Be the first to review!</div>'; return; }
+    box.innerHTML = j.reviews.map(rv => `
+      <div style="border-bottom:1px solid var(--border);padding:8px 0;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="color:#f59e0b;font-weight:700;">${'★'.repeat(rv.rating)}${'☆'.repeat(5 - rv.rating)}</span>
+          <span style="font-size:13px;font-weight:600;">${rv.patient}</span>
+          <span style="font-size:11px;color:#94a3b8;margin-left:auto;">${rv.date}</span>
+        </div>
+        <div style="font-size:13px;color:var(--text);margin-top:2px;">${rv.comment || ''}</div>
+      </div>`).join('');
+  } catch (e) { box.innerHTML = '<div style="color:#dc2626;font-size:13px;">Could not load reviews.</div>'; }
+}
+async function submitDoctorReview(id) {
+  const rating = document.getElementById('rev-rating').value;
+  const comment = document.getElementById('rev-comment').value.trim();
+  const patient = document.getElementById('rev-name').value.trim();
+  if (!comment) { showToast('Please write a short review', 'error'); return; }
+  const res = await fetch('/api/doctors/' + id + '/reviews', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ patient, rating: parseInt(rating), comment })
+  });
+  if (!res.ok) { showToast('Review failed', 'error'); return; }
+  const j = await res.json();
+  showToast('Thanks! Your review was posted ⭐', 'success');
+  await loadDoctorReviews(id);
+}
+// ---- Register as Doctor (real doctors join the directory) ----
+function openDoctorRegister() {
+  const countries = ['India','United States','United Kingdom','Canada','Australia','United Arab Emirates','Singapore','Malaysia','Germany','France','Netherlands','Ireland','New Zealand','South Africa','Sri Lanka','Nepal','Bangladesh','Mauritius','Qatar','Saudi Arabia','Oman','Kuwait','Bahrain','Kenya','Nigeria','Switzerland','Italy','Spain','Portugal','Japan'];
+  const specialties = ['Ayurveda General Practice','Panchakarma','Kayachikitsa','Shalya Tantra','Shalakya Tantra','Prasuti Tantra (Obstetrics)','Kaumarbhritya (Pediatrics)','Agada Tantra (Toxicology)','Rasayana (Rejuvenation)','Vajikarana','Swasthavritta (Preventive)','Yoga & Naturopathy','Allopathy - General Physician','Homeopathy','Unani','Naturopathy','Acupuncture','Cardiology','Dermatology','Orthopedics','Neurology','Gynecology','Pediatrics','ENT','Ophthalmology','Dental','Psychiatry','Oncology','Urology','Gastroenterology','Pulmonology','Endocrinology','Nephrology','Rheumatology','General Surgery','Plastic Surgery','Physiotherapy','Occupational Therapy','Speech Therapy','Dietetics & Nutrition'];
+  const modes = ['In-person','Video Consult','Home Visit'];
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '➕ Register as a Doctor';
+  document.getElementById('modal-body').innerHTML = `
+    <p style="font-size:13px;color:var(--text-light);margin-bottom:10px;">Join our global directory free of charge. Patients worldwide can find and book you. (Verification badge is granted after credential check.)</p>
+    <div class="filter-grid">
+      <div class="filter-item"><label>Full Name *</label><input id="dr-name" placeholder="Dr. Jane Doe"></div>
+      <div class="filter-item"><label>Specialty *</label><select id="dr-specialty">${specialties.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      <div class="filter-item"><label>Degree *</label><input id="dr-degree" placeholder="e.g. BAMS, MD (Ayurveda) / MBBS"></div>
+      <div class="filter-item"><label>Country *</label><select id="dr-country">${countries.map(c=>`<option>${c}</option>`).join('')}</select></div>
+      <div class="filter-item"><label>State / Region</label><input id="dr-state" placeholder="e.g. Maharashtra / California"></div>
+      <div class="filter-item"><label>City *</label><input id="dr-city" placeholder="e.g. Kochi / London"></div>
+      <div class="filter-item"><label>Clinic / Hospital</label><input id="dr-clinic" placeholder="Your practice name"></div>
+      <div class="filter-item"><label>Phone *</label><input id="dr-phone" placeholder="+91 9xxxxxxxxx"></div>
+      <div class="filter-item"><label>Email</label><input id="dr-email" placeholder="you@clinic.com"></div>
+      <div class="filter-item"><label>Experience (years)</label><input id="dr-exp" type="number" min="0" placeholder="10"></div>
+      <div class="filter-item"><label>Consultation Fee (in local ₹/$)</label><input id="dr-fee" type="number" min="0" placeholder="500"></div>
+      <div class="filter-item"><label>Languages (comma separated)</label><input id="dr-langs" placeholder="English, Hindi"></div>
+      <div class="filter-item"><label>Consultation Modes</label><select id="dr-modes" multiple>${modes.map(m=>`<option selected>${m}</option>`).join('')}</select></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Address</label><input id="dr-address" placeholder="Street, area, city"></div>
+    </div>
+    <div class="filter-actions" style="margin-top:12px;">
+      <button class="btn btn-accent" onclick="submitDoctorRegister()">✅ Submit Registration</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    </div>`;
+  modal.classList.add('active');
+}
+async function submitDoctorRegister() {
+  const body = {
+    name: document.getElementById('dr-name').value.trim(),
+    specialty: document.getElementById('dr-specialty').value,
+    degree: document.getElementById('dr-degree').value.trim(),
+    country: document.getElementById('dr-country').value,
+    state: document.getElementById('dr-state').value.trim(),
+    city: document.getElementById('dr-city').value.trim(),
+    clinic: document.getElementById('dr-clinic').value.trim(),
+    phone: document.getElementById('dr-phone').value.trim(),
+    email: document.getElementById('dr-email').value.trim(),
+    experience: document.getElementById('dr-exp').value,
+    fee: document.getElementById('dr-fee').value,
+    languages: document.getElementById('dr-langs').value.split(',').map(s=>s.trim()).filter(Boolean),
+    consultationModes: Array.from(document.getElementById('dr-modes').selectedOptions).map(o=>o.value),
+    address: document.getElementById('dr-address').value.trim()
+  };
+  if (!body.name || !body.degree || !body.city || !body.phone) { showToast('Name, degree, city and phone are required', 'error'); return; }
+  const res = await fetch('/api/doctors/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); showToast('Registration failed: ' + (e.error||''), 'error'); return; }
+  const j = await res.json();
+  showToast('🎉 Doctor profile created! ID ' + j.doctor.id, 'success');
+  closeModal();
+  switchTab('doctors');
+  setTimeout(() => showDetail('doctor', j.doctor.id), 500);
+}
+function scrollToDoctors() {
+  switchTab('doctors');
+  document.getElementById('section-doctors').scrollIntoView({ behavior: 'smooth' });
+}
   if (type === 'hospital') {
     return `
       <div class="info-grid">
