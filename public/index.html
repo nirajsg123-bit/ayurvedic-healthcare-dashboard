@@ -679,6 +679,14 @@ body {
       <button class="btn btn-secondary btn-sm" onclick="toggleCompareMode()" id="compareToggle" title="Compare mode">⚖️ Compare</button>
       <button class="btn btn-secondary btn-sm" onclick="showFavorites()" title="My Favorites">⭐ Favorites</button>
       <button class="btn btn-secondary btn-sm" onclick="showSearchHistory()" title="Search History">🕐 History</button>
+      <span id="authArea"></span>
+      <button class="btn btn-sm btn-accent" onclick="openDoctorLogin()">🔐 Doctor Login</button>
+      <button class="btn btn-sm btn-secondary" onclick="openAdminLogin()">🛡️ Admin</button>
+    </div>
+    <div class="live-bar" id="liveBar">
+      <span class="live-dot"></span>
+      <span class="live-label">LIVE</span>
+      <div class="live-ticker" id="liveTicker"><span>Connecting to live health updates…</span></div>
     </div>
     <nav class="nav-tabs">
       <button class="nav-tab active" data-section="doctors">👨‍⚕️ Doctors</button>
@@ -2223,7 +2231,7 @@ function renderDetail(type, d) {
         </div>
       </div>
       <div class="modal-section" style="text-align:center;padding-top:8px;">
-        <button class="btn btn-accent" style="font-size:15px;padding:12px 26px;" onclick="bookDoctor('${d.id}')">📅 Book Appointment with ${d.name.split(' ').slice(-1)[0]}</button>
+        <button class="btn btn-accent" style="font-size:15px;padding:12px 26px;" onclick="bookConsultation('${d.id}')">📅 Book Consultation with ${d.name.split(' ').slice(-1)[0]}</button>
       </div>
     `;
   }
@@ -2260,36 +2268,103 @@ async function submitDoctorReview(id) {
   showToast('Thanks! Your review was posted ⭐', 'success');
   await loadDoctorReviews(id);
 }
+async function bookConsultation(doctorId) {
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '📅 Book Consultation';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="filter-grid">
+      <div class="filter-item"><label>Your Name *</label><input id="bk2-name" placeholder="Full name"></div>
+      <div class="filter-item"><label>Phone *</label><input id="bk2-phone" placeholder="+91 9xxxxxxxxx"></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Email</label><input id="bk2-email" placeholder="you@example.com"></div>
+      <div class="filter-item"><label>Preferred Date *</label><input id="bk2-date" type="date"></div>
+      <div class="filter-item"><label>Preferred Time</label><input id="bk2-time" type="time" value="10:00"></div>
+      <div class="filter-item"><label>Mode</label><select id="bk2-mode">${MODE_LIST.map(m=>`<option>${m}</option>`).join('')}</select></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Reason / Symptoms</label><textarea id="bk2-reason" placeholder="Briefly describe your concern"></textarea></div>
+    </div>
+    <div class="filter-actions" style="margin-top:12px;">
+      <button class="btn btn-accent" onclick="bookConsultationSubmit('${doctorId}')">✅ Confirm Booking</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    </div>`;
+  modal.classList.add('active');
+}
+async function bookConsultationSubmit(doctorId) {
+  const body = {
+    patientName: document.getElementById('bk2-name').value.trim(),
+    phone: document.getElementById('bk2-phone').value.trim(),
+    email: document.getElementById('bk2-email').value.trim(),
+    date: document.getElementById('bk2-date').value,
+    time: document.getElementById('bk2-time').value,
+    mode: document.getElementById('bk2-mode').value,
+    reason: document.getElementById('bk2-reason').value.trim()
+  };
+  if (!body.patientName || !body.phone || !body.date) { showToast('Name, phone and date are required', 'error'); return; }
+  const res = await fetch('/api/doctors/' + doctorId + '/book', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); showToast('Booking failed: ' + (e.error||''), 'error'); return; }
+  showToast('✅ Consultation requested! The doctor will confirm.', 'success');
+  closeModal();
+}
 // ---- Register as Doctor (real doctors join the directory) ----
+// ===== AUTH HELPERS (token in localStorage) =====
+const COUNTRIES_LIST = ['India','United States','United Kingdom','Canada','Australia','United Arab Emirates','Singapore','Malaysia','Germany','France','Netherlands','Ireland','New Zealand','South Africa','Sri Lanka','Nepal','Bangladesh','Mauritius','Qatar','Saudi Arabia','Oman','Kuwait','Bahrain','Kenya','Nigeria','Switzerland','Italy','Spain','Portugal','Japan'];
+const SPECIALTY_LIST = ['Ayurveda General Practice','Panchakarma','Kayachikitsa','Shalya Tantra','Shalakya Tantra','Prasuti Tantra (Obstetrics)','Kaumarbhritya (Pediatrics)','Agada Tantra (Toxicology)','Rasayana (Rejuvenation)','Vajikarana','Swasthavritta (Preventive)','Yoga & Naturopathy','Allopathy - General Physician','Homeopathy','Unani','Naturopathy','Acupuncture','Cardiology','Dermatology','Orthopedics','Neurology','Gynecology','Pediatrics','ENT','Ophthalmology','Dental','Psychiatry','Oncology','Urology','Gastroenterology','Pulmonology','Endocrinology','Nephrology','Rheumatology','General Surgery','Plastic Surgery','Physiotherapy','Occupational Therapy','Speech Therapy','Dietetics & Nutrition'];
+const MODE_LIST = ['In-person','Video Consult','Home Visit'];
+function getAuth() { try { return JSON.parse(localStorage.getItem('auth') || 'null'); } catch (e) { return null; } }
+function setAuth(a) { localStorage.setItem('auth', JSON.stringify(a)); }
+function clearAuth() { localStorage.removeItem('auth'); }
+function authHeaders(extra = {}) { const a = getAuth(); return a && a.token ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + a.token, ...extra } : { 'Content-Type': 'application/json', ...extra }; }
+function renderAuthArea() {
+  const el = document.getElementById('authArea'); if (!el) return;
+  const a = getAuth();
+  if (!a) { el.innerHTML = ''; return; }
+  if (a.role === 'doctor') el.innerHTML = `<button class="btn btn-sm btn-success" onclick="openDoctorDashboard()">🩺 ${a.name ? a.name.replace('Dr. ','') : 'Dashboard'}</button>`;
+  else if (a.role === 'admin') el.innerHTML = `<button class="btn btn-sm btn-success" onclick="openAdminPanel()">🛡️ ${a.name || 'Admin'}</button>`;
+}
+function logout() { clearAuth(); renderAuthArea(); showToast('Logged out', 'info'); switchTab('doctors'); }
+
+// ===== DOCTOR REGISTRATION (with OTP) =====
 function openDoctorRegister() {
-  const countries = ['India','United States','United Kingdom','Canada','Australia','United Arab Emirates','Singapore','Malaysia','Germany','France','Netherlands','Ireland','New Zealand','South Africa','Sri Lanka','Nepal','Bangladesh','Mauritius','Qatar','Saudi Arabia','Oman','Kuwait','Bahrain','Kenya','Nigeria','Switzerland','Italy','Spain','Portugal','Japan'];
-  const specialties = ['Ayurveda General Practice','Panchakarma','Kayachikitsa','Shalya Tantra','Shalakya Tantra','Prasuti Tantra (Obstetrics)','Kaumarbhritya (Pediatrics)','Agada Tantra (Toxicology)','Rasayana (Rejuvenation)','Vajikarana','Swasthavritta (Preventive)','Yoga & Naturopathy','Allopathy - General Physician','Homeopathy','Unani','Naturopathy','Acupuncture','Cardiology','Dermatology','Orthopedics','Neurology','Gynecology','Pediatrics','ENT','Ophthalmology','Dental','Psychiatry','Oncology','Urology','Gastroenterology','Pulmonology','Endocrinology','Nephrology','Rheumatology','General Surgery','Plastic Surgery','Physiotherapy','Occupational Therapy','Speech Therapy','Dietetics & Nutrition'];
-  const modes = ['In-person','Video Consult','Home Visit'];
   const modal = document.getElementById('modal');
   modal.querySelector('#modal-title').textContent = '➕ Register as a Doctor';
   document.getElementById('modal-body').innerHTML = `
-    <p style="font-size:13px;color:var(--text-light);margin-bottom:10px;">Join our global directory free of charge. Patients worldwide can find and book you. (Verification badge is granted after credential check.)</p>
+    <p style="font-size:13px;color:var(--text-light);margin-bottom:10px;">Join our global directory free of charge. Patients worldwide can find and book you. Verify your phone/email with a one-time code to prevent spam.</p>
     <div class="filter-grid">
       <div class="filter-item"><label>Full Name *</label><input id="dr-name" placeholder="Dr. Jane Doe"></div>
-      <div class="filter-item"><label>Specialty *</label><select id="dr-specialty">${specialties.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      <div class="filter-item"><label>Specialty *</label><select id="dr-specialty">${SPECIALTY_LIST.map(s=>`<option>${s}</option>`).join('')}</select></div>
       <div class="filter-item"><label>Degree *</label><input id="dr-degree" placeholder="e.g. BAMS, MD (Ayurveda) / MBBS"></div>
-      <div class="filter-item"><label>Country *</label><select id="dr-country">${countries.map(c=>`<option>${c}</option>`).join('')}</select></div>
+      <div class="filter-item"><label>Country *</label><select id="dr-country">${COUNTRIES_LIST.map(c=>`<option ${c==='India'?'selected':''}>${c}</option>`).join('')}</select></div>
       <div class="filter-item"><label>State / Region</label><input id="dr-state" placeholder="e.g. Maharashtra / California"></div>
       <div class="filter-item"><label>City *</label><input id="dr-city" placeholder="e.g. Kochi / London"></div>
       <div class="filter-item"><label>Clinic / Hospital</label><input id="dr-clinic" placeholder="Your practice name"></div>
       <div class="filter-item"><label>Phone *</label><input id="dr-phone" placeholder="+91 9xxxxxxxxx"></div>
       <div class="filter-item"><label>Email</label><input id="dr-email" placeholder="you@clinic.com"></div>
       <div class="filter-item"><label>Experience (years)</label><input id="dr-exp" type="number" min="0" placeholder="10"></div>
-      <div class="filter-item"><label>Consultation Fee (in local ₹/$)</label><input id="dr-fee" type="number" min="0" placeholder="500"></div>
-      <div class="filter-item"><label>Languages (comma separated)</label><input id="dr-langs" placeholder="English, Hindi"></div>
-      <div class="filter-item"><label>Consultation Modes</label><select id="dr-modes" multiple>${modes.map(m=>`<option selected>${m}</option>`).join('')}</select></div>
+      <div class="filter-item"><label>Consultation Fee (local ₹/$)</label><input id="dr-fee" type="number" min="0" placeholder="500"></div>
+      <div class="filter-item"><label>Login Password *</label><input id="dr-password" type="password" placeholder="min 6 chars"></div>
+      <div class="filter-item"><label>Languages (comma sep.)</label><input id="dr-langs" placeholder="English, Hindi"></div>
+      <div class="filter-item"><label>Consultation Modes</label><select id="dr-modes" multiple>${MODE_LIST.map(m=>`<option selected>${m}</option>`).join('')}</select></div>
       <div class="filter-item" style="grid-column:1/-1;"><label>Address</label><input id="dr-address" placeholder="Street, area, city"></div>
     </div>
+    <div class="filter-grid" style="margin-top:8px;">
+      <div class="filter-item"><label>Verify Phone/Email (OTP)</label><input id="dr-otpdest" placeholder="same as phone or email above"></div>
+      <div class="filter-item" style="display:flex;gap:8px;align-items:flex-end;">
+        <button class="btn btn-secondary" type="button" onclick="requestRegOtp()">📨 Send OTP</button>
+        <input id="dr-otp" placeholder="6-digit code" style="width:120px;">
+      </div>
+    </div>
+    <div id="otp-hint" style="font-size:12px;color:#16a34a;margin:6px 0;"></div>
     <div class="filter-actions" style="margin-top:12px;">
       <button class="btn btn-accent" onclick="submitDoctorRegister()">✅ Submit Registration</button>
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     </div>`;
   modal.classList.add('active');
+}
+async function requestRegOtp() {
+  const dest = (document.getElementById('dr-otpdest').value || document.getElementById('dr-phone').value).trim();
+  if (!dest) { showToast('Enter phone or email to receive OTP', 'error'); return; }
+  const res = await fetch('/api/otp/request', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ destination: dest, purpose: 'registration' }) });
+  const j = await res.json();
+  document.getElementById('otp-hint').textContent = j.devCode ? ('Dev OTP: ' + j.devCode + ' (in production this is sent via SMS/email)') : 'OTP sent.';
+  showToast('OTP sent to ' + dest, 'success');
 }
 async function submitDoctorRegister() {
   const body = {
@@ -2304,23 +2379,217 @@ async function submitDoctorRegister() {
     email: document.getElementById('dr-email').value.trim(),
     experience: document.getElementById('dr-exp').value,
     fee: document.getElementById('dr-fee').value,
+    password: document.getElementById('dr-password').value,
     languages: document.getElementById('dr-langs').value.split(',').map(s=>s.trim()).filter(Boolean),
     consultationModes: Array.from(document.getElementById('dr-modes').selectedOptions).map(o=>o.value),
-    address: document.getElementById('dr-address').value.trim()
+    address: document.getElementById('dr-address').value.trim(),
+    otp: document.getElementById('dr-otp').value.trim(),
+    otpDest: (document.getElementById('dr-otpdest').value || document.getElementById('dr-phone').value).trim()
   };
-  if (!body.name || !body.degree || !body.city || !body.phone) { showToast('Name, degree, city and phone are required', 'error'); return; }
+  if (!body.name || !body.degree || !body.city || !body.phone || !body.password) { showToast('Name, degree, city, phone and password are required', 'error'); return; }
+  if (body.password.length < 6) { showToast('Password must be at least 6 characters', 'error'); return; }
   const res = await fetch('/api/doctors/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) { const e = await res.json().catch(()=>({})); showToast('Registration failed: ' + (e.error||''), 'error'); return; }
   const j = await res.json();
-  showToast('🎉 Doctor profile created! ID ' + j.doctor.id, 'success');
+  setAuth({ role: 'doctor', token: j.token, name: j.doctor.name, id: j.doctor.id });
+  renderAuthArea();
+  showToast('🎉 Profile created! ID ' + j.doctor.id, 'success');
   closeModal();
-  switchTab('doctors');
-  setTimeout(() => showDetail('doctor', j.doctor.id), 500);
+  openDoctorDashboard();
+}
+async function openDoctorLogin() {
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '🔐 Doctor Login';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="filter-grid">
+      <div class="filter-item" style="grid-column:1/-1;"><label>Phone *</label><input id="lg-phone" placeholder="+91 9xxxxxxxxx"></div>
+      <div class="filter-item"><label>Password</label><input id="lg-pass" type="password" placeholder="Your password"></div>
+      <div class="filter-item" style="display:flex;gap:8px;align-items:flex-end;">
+        <button class="btn btn-secondary" type="button" onclick="doctorOtpLogin()">📨 Login via OTP</button>
+      </div>
+    </div>
+    <div id="lg-otp-wrap" style="display:none;margin-top:8px;">
+      <div class="filter-item"><label>OTP sent to phone</label><input id="lg-otp" placeholder="6-digit code"></div>
+    </div>
+    <div class="filter-actions" style="margin-top:12px;">
+      <button class="btn btn-accent" onclick="submitDoctorLogin()">Login</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    </div>`;
+  modal.classList.add('active');
+}
+async function doctorOtpLogin() {
+  const phone = document.getElementById('lg-phone').value.trim();
+  const r = await fetch('/api/otp/request', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ destination: phone, purpose: 'login' }) });
+  const j = await r.json();
+  document.getElementById('lg-otp-wrap').style.display = 'block';
+  document.getElementById('lg-otp').value = j.devCode || '';
+  showToast('OTP sent (dev: ' + (j.devCode||'') + ')', 'success');
+}
+async function submitDoctorLogin() {
+  const phone = document.getElementById('lg-phone').value.trim();
+  const password = document.getElementById('lg-pass').value;
+  const otp = document.getElementById('lg-otp').value.trim();
+  const res = await fetch('/api/doctors/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ phone, password, otp, otpDest: phone }) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); showToast('Login failed: ' + (e.error||''), 'error'); return; }
+  const j = await res.json();
+  setAuth({ role:'doctor', token: j.token, name: j.doctor.name, id: j.doctor.id, verified: j.doctor.verified });
+  renderAuthArea();
+  showToast('Welcome ' + j.doctor.name, 'success');
+  closeModal();
+  openDoctorDashboard();
+}
+// ===== DOCTOR DASHBOARD =====
+async function openDoctorDashboard() {
+  const a = getAuth(); if (!a || a.role !== 'doctor') { openDoctorLogin(); return; }
+  const res = await fetch('/api/doctor/me', { headers: authHeaders() });
+  if (!res.ok) { clearAuth(); renderAuthArea(); openDoctorLogin(); return; }
+  const j = await res.json();
+  const d = j.doctor;
+  const reviewsHtml = (j.reviews||[]).map(rv => `
+    <div style="border-bottom:1px solid var(--border);padding:8px 0;">
+      <div><span style="color:#f59e0b;font-weight:700;">${'★'.repeat(rv.rating)}${'☆'.repeat(5-rv.rating)}</span> <b>${rv.patient}</b> <span style="font-size:11px;color:#94a3b8;">${rv.date}</span></div>
+      <div style="font-size:13px;">${rv.comment||''}</div>
+      ${rv.doctorReply ? `<div style="font-size:12px;color:#16a34a;margin-top:3px;">↳ You: ${rv.doctorReply}</div>` : ''}
+      <div style="margin-top:4px;display:flex;gap:8px;">
+        <button class="btn btn-sm btn-secondary" onclick="replyReview('${rv.id}')">Reply</button>
+        <button class="btn btn-sm btn-secondary" onclick="deleteReview('${rv.id}')">Delete</button>
+      </div>
+    </div>`).join('') || '<div style="color:#64748b;font-size:13px;">No reviews yet.</div>';
+  const bookingsHtml = (j.bookings||[]).map(b => `
+    <div style="border-bottom:1px solid var(--border);padding:8px 0;display:flex;justify-content:space-between;gap:8px;align-items:center;">
+      <div><b>${b.patientName}</b> — ${b.date} ${b.time} <span style="color:#64748b;">(${b.mode})</span><br><span style="font-size:12px;color:#64748b;">${b.reason||''}</span></div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span class="badge ${b.status==='Confirmed'?'badge-success':b.status==='Cancelled'?'badge-danger':'badge-info'}">${b.status}</span>
+        <button class="btn btn-sm btn-secondary" onclick="setBookingStatus('${b.id}','Confirmed')">✓</button>
+        <button class="btn btn-sm btn-secondary" onclick="setBookingStatus('${b.id}','Cancelled')">✕</button>
+      </div>
+    </div>`).join('') || '<div style="color:#64748b;font-size:13px;">No bookings yet.</div>';
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '🩺 Doctor Dashboard — ' + d.name;
+  document.getElementById('modal-body').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span>${d.verified ? '<span style="background:#16a34a;color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;">✔ Verified</span>' : '<span style="background:#f59e0b;color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;">⏳ Pending verification</span>'} <span style="margin-left:8px;">★ ${d.rating}${d.ratingCount?' ('+d.ratingCount+')':''}</span></span>
+      <button class="btn btn-sm btn-secondary" onclick="logout()">Logout</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+      <button class="btn btn-sm btn-accent" onclick="editProfile()">✏️ Edit Profile</button>
+      <button class="btn btn-sm btn-secondary" onclick="openDoctorDashboard()">🔄 Refresh</button>
+    </div>
+    <div class="modal-section"><h3>📅 Bookings (${j.bookings.length})</h3>${bookingsHtml}</div>
+    <div class="modal-section"><h3>⭐ Reviews (${j.reviews.length})</h3>${reviewsHtml}</div>`;
+  modal.classList.add('active');
+}
+async function setBookingStatus(id, status) {
+  const res = await fetch('/api/doctor/bookings/' + id, { method:'PUT', headers: authHeaders(), body: JSON.stringify({ status }) });
+  if (!res.ok) { showToast('Update failed', 'error'); return; }
+  showToast('Booking ' + status, 'success'); openDoctorDashboard();
+}
+async function deleteReview(id) {
+  const res = await fetch('/api/doctor/reviews/' + id, { method:'DELETE', headers: authHeaders() });
+  if (!res.ok) { showToast('Delete failed', 'error'); return; }
+  showToast('Review removed', 'success'); openDoctorDashboard();
+}
+async function replyReview(id) {
+  const reply = prompt('Your reply to this review:'); if (reply === null) return;
+  const res = await fetch('/api/doctor/reviews/' + id + '/reply', { method:'POST', headers: authHeaders(), body: JSON.stringify({ reply }) });
+  if (!res.ok) { showToast('Reply failed', 'error'); return; }
+  showToast('Reply posted', 'success'); openDoctorDashboard();
+}
+function editProfile() {
+  const a = getAuth(); if (!a || a.role !== 'doctor') return;
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '✏️ Edit Profile';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="filter-grid">
+      <div class="filter-item"><label>Clinic / Hospital</label><input id="ep-clinic" placeholder="Practice name"></div>
+      <div class="filter-item"><label>Consultation Fee</label><input id="ep-fee" type="number" min="0"></div>
+      <div class="filter-item"><label>Experience (years)</label><input id="ep-exp" type="number" min="0"></div>
+      <div class="filter-item"><label>Available Days</label><input id="ep-days" placeholder="Mon-Sat"></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Available Hours</label><input id="ep-hours" placeholder="9:00 AM - 6:00 PM"></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Address</label><input id="ep-address" placeholder="Street, area, city"></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Languages (comma sep.)</label><input id="ep-langs" placeholder="English, Hindi"></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Consultation Modes</label><select id="ep-modes" multiple>${MODE_LIST.map(m=>`<option>${m}</option>`).join('')}</select></div>
+    </div>
+    <div class="filter-actions" style="margin-top:12px;">
+      <button class="btn btn-accent" onclick="saveProfile()">💾 Save</button>
+      <button class="btn btn-secondary" onclick="openDoctorDashboard()">Cancel</button>
+    </div>`;
+  modal.classList.add('active');
+}
+async function saveProfile() {
+  const body = {
+    clinic: document.getElementById('ep-clinic').value.trim(),
+    consultationFee: document.getElementById('ep-fee').value,
+    experience: document.getElementById('ep-exp').value,
+    availableDays: document.getElementById('ep-days').value.trim(),
+    availableHours: document.getElementById('ep-hours').value.trim(),
+    address: document.getElementById('ep-address').value.trim(),
+    languages: document.getElementById('ep-langs').value.split(',').map(s=>s.trim()).filter(Boolean),
+    consultationModes: Array.from(document.getElementById('ep-modes').selectedOptions).map(o=>o.value)
+  };
+  const res = await fetch('/api/doctor/me', { method:'PUT', headers: authHeaders(), body: JSON.stringify(body) });
+  if (!res.ok) { showToast('Save failed', 'error'); return; }
+  showToast('Profile updated', 'success'); openDoctorDashboard();
+}
+// ===== ADMIN VERIFICATION PANEL =====
+function openAdminLogin() {
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '🛡️ Admin Login';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="filter-grid">
+      <div class="filter-item" style="grid-column:1/-1;"><label>Username</label><input id="ad-user" value="admin"></div>
+      <div class="filter-item" style="grid-column:1/-1;"><label>Password</label><input id="ad-pass" type="password" value="admin123"></div>
+    </div>
+    <div class="filter-actions" style="margin-top:12px;">
+      <button class="btn btn-accent" onclick="submitAdminLogin()">Login</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    </div>`;
+  modal.classList.add('active');
+}
+async function submitAdminLogin() {
+  const res = await fetch('/api/admin/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username: document.getElementById('ad-user').value, password: document.getElementById('ad-pass').value }) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); showToast('Admin login failed: ' + (e.error||''), 'error'); return; }
+  const j = await res.json();
+  setAuth({ role:'admin', token: j.token, name: j.admin.name });
+  renderAuthArea();
+  showToast('Admin logged in', 'success');
+  closeModal(); openAdminPanel();
+}
+async function openAdminPanel() {
+  const a = getAuth(); if (!a || a.role !== 'admin') { openAdminLogin(); return; }
+  const res = await fetch('/api/admin/unverified', { headers: authHeaders() });
+  if (!res.ok) { clearAuth(); renderAuthArea(); openAdminLogin(); return; }
+  const j = await res.json();
+  const list = (j.doctors||[]).map(d => `
+    <div style="border-bottom:1px solid var(--border);padding:10px 0;display:flex;justify-content:space-between;gap:10px;align-items:center;">
+      <div><b>${d.name}</b> — ${d.specialty}<br><span style="font-size:12px;color:#64748b;">${d.city}, ${d.country} • ${d.phone}${d.email?' • '+d.email:''}</span><br><span style="font-size:12px;color:#64748b;">Degree: ${d.degree}</span></div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-sm btn-success" onclick="verifyDoctor('${d.id}','approve')">✔ Verify</button>
+        <button class="btn btn-sm btn-secondary" onclick="verifyDoctor('${d.id}','reject')">✕ Reject</button>
+      </div>
+    </div>`).join('') || '<div style="color:#16a34a;font-size:13px;">🎉 All registered doctors are verified!</div>';
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '🛡️ Admin — Doctor Verification';
+  document.getElementById('modal-body').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span>Pending doctors: <b>${j.doctors.length}</b></span>
+      <button class="btn btn-sm btn-secondary" onclick="logout()">Logout</button>
+    </div>
+    ${list}
+    <div style="margin-top:10px;"><button class="btn btn-sm btn-secondary" onclick="openAdminPanel()">🔄 Refresh</button></div>`;
+  modal.classList.add('active');
+}
+async function verifyDoctor(id, action) {
+  const res = await fetch('/api/admin/verify/' + id, { method:'POST', headers: authHeaders(), body: JSON.stringify({ action }) });
+  if (!res.ok) { showToast('Action failed', 'error'); return; }
+  showToast(action === 'approve' ? 'Doctor verified ✔' : 'Doctor rejected', action === 'approve' ? 'success' : 'warning');
+  openAdminPanel();
 }
 function scrollToDoctors() {
   switchTab('doctors');
   document.getElementById('section-doctors').scrollIntoView({ behavior: 'smooth' });
 }
+
   if (type === 'hospital') {
     return `
       <div class="info-grid">
@@ -3147,6 +3416,7 @@ init();
     </div>
     <button class="bot-close" onclick="toggleBot()">×</button>
   </div>
+  <div id="bot-specialist" style="padding:5px 16px;font-size:11px;color:#fff;background:#0f766e;border-bottom:1px solid rgba(255,255,255,.2);">🧠 AyurBrain (master) — routing to best specialist</div>
   <div id="bot-messages"></div>
   <div id="bot-chips"></div>
   <div id="bot-input-row">
@@ -3184,7 +3454,25 @@ init();
   #bot-input:focus{border-color:#2f9e8f;}
   .bot-send{background:#2f9e8f;color:#fff;border:none;border-radius:10px;width:42px;cursor:pointer;font-size:16px;}
   .bot-typing{font-style:italic;color:#888;}
-</style>
+  .bot-cards{display:flex;flex-direction:column;gap:8px;margin:6px 0;}
+  .bot-card{border:1px solid #cde9e2;background:#f4fbf9;border-radius:10px;padding:9px 11px;}
+  .bot-card-title{font-weight:700;font-size:13px;color:#0f766e;}
+  .bot-card-sub{font-size:11.5px;color:#64748b;margin:2px 0;}
+  .bot-card-row{font-size:12px;color:#334155;line-height:1.5;}
+  .bot-card .bot-chip{margin-top:6px;}  .live-bar{display:flex;align-items:center;gap:10px;background:linear-gradient(90deg,#0f766e,#16a34a);color:#fff;padding:6px 14px;overflow:hidden;font-size:12.5px;}
+  .live-dot{width:9px;height:9px;border-radius:50%;background:#fde047;box-shadow:0 0 0 0 rgba(253,224,71,.8);animation:livedot 1.4s infinite;}
+  @keyframes livedot{0%{box-shadow:0 0 0 0 rgba(253,224,71,.7)}70%{box-shadow:0 0 0 8px rgba(253,224,71,0)}100%{box-shadow:0 0 0 0 rgba(253,224,71,0)}}
+  .live-label{font-weight:800;letter-spacing:1px;background:rgba(255,255,255,.18);padding:2px 8px;border-radius:6px;font-size:10px;}
+  .live-ticker{flex:1;overflow:hidden;white-space:nowrap;position:relative;height:18px;}
+  .live-ticker span{display:inline-block;padding-left:100%;animation:tick 38s linear infinite;}
+  @keyframes tick{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
+  .live-stat{display:inline-block;background:rgba(255,255,255,.12);border-radius:10px;padding:1px 8px;margin:0 2px;font-weight:600;}
+  .live-alert{color:#fde047;font-weight:700;}
+  .stat-pill{background:linear-gradient(135deg,#2f9e8f,#16a34a);color:#fff;border-radius:20px;padding:6px 14px;font-size:13px;font-weight:600;}
+  .live-alert-box{background:#fff7ed;border-left:4px solid #f59e0b;padding:10px 14px;border-radius:8px;color:#9a3412;font-size:14px;}
+  .news-item{padding:6px 0;border-bottom:1px solid #eee;font-size:13px;}
+  .live-bar{cursor:pointer;}
+
 <script>
 // ---------- AYURVEDA ASSISTANT (client-side bot over local APIs) ----------
 var botOpen=false;
@@ -3212,14 +3500,14 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,function(c){return {'&'
 async function apiGet(url){ var r=await fetch(url); if(!r.ok) throw new Error('no data'); return r.json(); }
 function intentOf(text){
   var t=text.toLowerCase();
-  if(t.match(/\b(book|appointment|schedule|consult)\b/)) return 'book';
-  if(t.match(/\b(i have|suffering|symptom|feel|feeling|experiencing|having)\b/)) return 'diagnose';
-  if(t.match(/\b(hospital|clinic)\b/)) return 'hospital';
-  if(t.match(/\b(yoga|asana|pranayama|meditat)\b/)) return 'yoga';
-  if(t.match(/\b(therap|panchakarma|abhyanga|basti|virechan)\b/)) return 'therapy';
-  if(t.match(/\b(herb|plant|medicine|remedy|dosha|rasayana)\b/)) return 'herb';
-  if(t.match(/\b(doctor|physician|specialist|ayurved|physio|cardio|neuro)\b/)) return 'doctor';
-  if(t.match(/\b(condition|disease|diabetes|arthritis|pcos|anxiety|acne|cough|fever|obesity)\b/)) return 'condition';
+  if(t.match(/\b(book|appointment|schedule|consult)/)) return 'book';
+  if(t.match(/\b(i have|suffering|symptom|feel|feeling|experiencing|having)/)) return 'diagnose';
+  if(t.match(/\b(hospital|clinic)/)) return 'hospital';
+  if(t.match(/\b(yoga|asana|pranayama|meditat)/)) return 'yoga';
+  if(t.match(/\b(therap|panchakarma|abhyanga|basti|virechan)/)) return 'therapy';
+  if(t.match(/\(herb|herbs|herbal|plant|medicine|remedy|dosha|rasayana|ashwagandha|triphala|turmeric|neem|amla|tulsi)\\b/)) return 'herb';
+  if(t.match(/\b(doctor|physician|specialist|ayurved|physio|cardio|neuro)/)) return 'doctor';
+  if(t.match(/\b(condition|disease|diabetes|arthritis|pcos|anxiety|acne|cough|fever|obesity)/)) return 'condition';
   return 'search';
 }
 function stateIn(text){ var states=['andhra pradesh','arunachal pradesh','assam','bihar','chhattisgarh','delhi','goa','gujarat','haryana','himachal pradesh','jammu and kashmir','jharkhand','karnataka','kerala','madhya pradesh','maharashtra','manipur','meghalaya','mizoram','nagaland','odisha','punjab','rajasthan','sikkim','tamil nadu','telangana','tripura','uttar pradesh','uttarakhand','west bengal']; for(var i=0;i<states.length;i++){ if(text.toLowerCase().indexOf(states[i])>=0) return states[i].replace(/\b\w/g,function(c){return c.toUpperCase();}); } return null; }
@@ -3285,6 +3573,385 @@ async function handleBot(text){
 // reset chip
 document.addEventListener('click',function(e){ if(e.target && e.target.classList && e.target.classList.contains('bot-chip') && e.target.textContent==='🔄 New question'){ renderChips([{label:'🩺 Find a doctor',q:'Find me an Ayurvedic doctor'},{label:'🌿 Herbs for diabetes',q:'Which herbs help with diabetes?'},{label:'🧘 Yoga for back pain',q:'What yoga helps back pain?'},{label:'📅 Book appointment',action:'book'}]); } });
 
+// ---------- LIVE HEALTH UPDATES (SSE client) ----------
+let LIVE_STATS = null;
+function connectLive() {
+  const ticker = document.getElementById('liveTicker');
+  let es, got = false;
+  try { es = new EventSource('/api/live/stream'); } catch(e) { startLivePolling(); return; }
+  es.onmessage = function(ev) {
+    got = true;
+    try {
+      const d = JSON.parse(ev.data);
+      LIVE_STATS = d.stats;
+      LIVE_TIP = d.tip; LIVE_ALERT = d.alert; LIVE_NEWS = d.news;
+      const bits = [
+        '💡 ' + d.tip,
+        '⚠️ ' + d.alert.region + ': ' + d.alert.alert,
+        d.news.map(n => '📰 ' + n).join('  •  '),
+        '🌐 Live network: ' + d.stats.doctors + ' doctors • ' + d.stats.herbs + ' herbs • ' + d.stats.verifiedRegistered + ' verified • ' + d.stats.onlineDoctors + ' online now • ' + d.stats.consultsToday + ' consults • ' + d.stats.reviews + ' reviews'
+      ];
+      ticker.innerHTML = '<span>' + bits.join('      ✦      ') + '</span>';
+      const badge = document.getElementById('liveStatBadge');
+      if (badge) badge.innerHTML = '🟢 ' + d.stats.onlineDoctors + ' doctors online • ' + d.stats.verifiedRegistered + ' verified';
+    } catch(e) {}
+  };
+  es.onerror = function() {
+    if (!got) { try { es.close(); } catch(e){} startLivePolling(); }
+  };
+  // Fallback: if no SSE message within 4s, poll instead
+  setTimeout(function(){ if (!got) { try { es.close(); } catch(e){} startLivePolling(); } }, 4000);
+}
+function startLivePolling() {
+  const tick = () => { fetch('/api/live/snapshot').then(r=>r.json()).then(d=>{ if(d && d.stats){ LIVE_STATS=d.stats; const ticker=document.getElementById('liveTicker'); if(ticker) ticker.innerHTML='<span>🌐 ' + d.stats.doctors + ' doctors • ' + d.stats.herbs + ' herbs • ' + d.stats.verifiedRegistered + ' verified • ' + d.stats.onlineDoctors + ' online • ' + d.tip + '</span>'; } }).catch(()=>{}); };
+  tick(); setInterval(tick, 8000);
+}
+function openLiveHealth() {
+  if (!LIVE_STATS) return;
+  const d = LIVE_STATS;
+  const modal = document.getElementById('modal');
+  modal.querySelector('#modal-title').textContent = '📡 Live Health Sector Updates';
+  document.getElementById('modal-body').innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <div class="stat-pill">👨‍⚕️ ${d.doctors} Doctors</div>
+      <div class="stat-pill">🟢 ${d.onlineDoctors} Online now</div>
+      <div class="stat-pill">✔ ${d.verifiedRegistered} Verified</div>
+      <div class="stat-pill">🌿 ${d.herbs} Herbs</div>
+      <div class="stat-pill">🏥 ${d.hospitals} Hospitals</div>
+      <div class="stat-pill">🧠 ${d.conditions} Conditions</div>
+      <div class="stat-pill">📅 ${d.consultsToday} Consults</div>
+      <div class="stat-pill">⭐ ${d.reviews} Reviews</div>
+    </div>
+    <div class="modal-section"><h3>⚠️ Global Wellness Alert</h3><div class="live-alert-box">${ (LIVE_ALERT?LIVE_ALERT.alert:'') }</div></div>
+    <div class="modal-section"><h3>💡 Daily Ayurvedic Tip</h3><div>${LIVE_TIP||''}</div></div>
+    <div class="modal-section"><h3>📰 Health News Feed</h3><div id="liveNewsFeed"></div></div>`;
+  modal.classList.add('active');
+  if (LIVE_NEWS) document.getElementById('liveNewsFeed').innerHTML = LIVE_NEWS.map(n=>'<div class="news-item">📰 '+n+'</div>').join('');
+}
+let LIVE_TIP='', LIVE_ALERT=null, LIVE_NEWS=[];
+// capture for modal
+const _origOnMsg = null;
+(function patchLive(){ const orig = connectLive.toString(); })();
+
+// ---------- SUPERINTELLIGENT BOT UPGRADES ----------
+// Boosted intent detection + multi-turn + proactive live tips
+function botIntentV2(text){
+  const t = text.toLowerCase();
+  if (t.match(/\b(book|appointment|schedule|consult|reserve)/)) return 'book';
+  if (t.match(/\b(live|update|news|alert|online|today|status|stats|how many)/)) return 'live';
+  if (t.match(/\b(tip|advice|routine|daily|habit)/)) return 'tip';
+  if (t.match(/\b(remind|reminder|track|symptom log|monitor)/)) return 'reminder';
+  if (t.match(/\b(i have|i am|suffering|symptom|feel|feeling|experiencing|having|pain|ache)/)) return 'diagnose';
+  if (t.match(/\b(hospital|clinic|centre|center)/)) return 'hospital';
+  if (t.match(/\b(yoga|asana|pranayama|meditat|exercise)/)) return 'yoga';
+  if (t.match(/\b(therap|panchakarma|abhyanga|basti|virechan|detox)/)) return 'therapy';
+  if(t.match(/\(herb|herbs|herbal|plant|medicine|remedy|dosha|rasayana|ashwagandha|triphala|turmeric|neem|amla|tulsi)\\b/)) return 'herb';
+  if (t.match(/\b(doctor|physician|specialist|ayurved|physio|cardio|neuro|find.*me)/)) return 'doctor';
+  if (t.match(/\b(condition|disease|diabetes|arthritis|pcos|anxiety|acne|cough|fever|obesity|thyroid|bp|pressure|sugar)/)) return 'condition';
+  return 'search';
+}
+// wrap handleBot to add live/tip/reminder intents
+const _handleBot = handleBot;
+handleBot = async function(text){
+  const intent = botIntentV2(text);
+  if (intent === 'live') {
+    const snap = await fetch('/api/live/snapshot').then(r=>r.json()).catch(()=>null);
+    if (!snap) return 'Live updates are streaming in the LIVE bar above. Tap it for the full dashboard. 📡';
+    return '📡 <b>Live Health Sector</b>:\n👨‍⚕️ ' + snap.stats.doctors + ' doctors (' + snap.stats.onlineDoctors + ' online now, ' + snap.stats.verifiedRegistered + ' verified)\n🌿 ' + snap.stats.herbs + ' herbs • 🏥 ' + snap.stats.hospitals + ' hospitals • 🧠 51 conditions\n📅 ' + snap.stats.consultsToday + ' consults today • ⭐ ' + snap.stats.reviews + ' patient reviews\n\n⚠️ <b>' + snap.alert.region + '</b>: ' + snap.alert.alert + '\n\n💡 Tip: ' + snap.tip + '\n\nTap the <b>LIVE</b> bar above or ask me “open live health” for the full feed.';
+  }
+  if (intent === 'tip') {
+    const snap = await fetch('/api/live/snapshot').then(r=>r.json()).catch(()=>null);
+    return '💡 <b>Daily Ayurvedic Tip:</b> ' + (snap?snap.tip:'Keep a consistent daily routine (dinacharya) — wake, eat and sleep at the same time to balance all three doshas.') + '\n\nWould you like a personalized routine? Tell me your dosha (Vata/Pitta/Kapha) or your main complaint.';
+  }
+  if (intent === 'reminder') {
+    return '⏰ I can set a wellness reminder for you. What would you like to be reminded about (e.g. “drink water”, “yoga at 7am”, “take Triphala”) and at what time? I’ll confirm it and log it under your profile. (You can also enable browser notifications.)';
+  }
+  return _handleBot(text);
+};
+// =================== SUPERINTELLIGENT MULTI-BOT SYSTEM ===================
+// A master "AyurBrain" router that delegates to a specialized domain bot for
+// every section. Each specialist consults LIVE API data and reasons about it.
+const BOT_INFO = {
+  doctors:    {emoji:'👨⚕️', name:'Doctor Finder Bot', role:'Finds verified doctors worldwide by specialty, location, dosha & consult mode'},
+  hospitals:  {emoji:'🏥', name:'Hospital Guide Bot', role:'Locates Ayurvedic hospitals & Panchakarma centres by region & type'},
+  herbs:      {emoji:'🌿', name:'Herb Intelligence Bot', role:'Recommends medicinal herbs by condition, dosha & evidence'},
+  therapies:  {emoji:'💆', name:'Therapy Advisor Bot', role:'Suggests Panchakarma & therapies by dosha & goal'},
+  yoga:       {emoji:'🧘', name:'Yoga Coach Bot', role:'Builds yoga/pranayama sequences by indication & level'},
+  health:     {emoji:'❤️', name:'Diagnosis Engine Bot', role:'Matches your symptoms to conditions & full treatment plans'},
+  analytics:  {emoji:'📊', name:'Analytics Oracle Bot', role:'Explains network trends, demand & wellness insights'},
+  appointments:{emoji:'📅', name:'Appointment Bot', role:'Manages bookings, reminders & scheduling'},
+  tracker:    {emoji:'📈', name:'Health Tracker Bot', role:'Interprets vitals, dosha scores & progress'},
+  reminder:   {emoji:'⏰', name:'Wellness Reminder Bot', role:'Builds daily routine & medication/herbal reminders (Dinacharya)'},
+  symptom:    {emoji:'🩺', name:'Symptom Tracker Bot', role:'Logs & trends your symptoms over time for early alerts'},
+  outbreak:   {emoji:'🦠', name:'Outbreak Monitor Bot', role:'Watches seasonal disease outbreaks & regional wellness alerts'},
+  herbai:     {emoji:'🤖', name:'AI Herb-Finder Bot', role:'Reverse-finds herbs from your symptoms + dosha (AI matching)'}
+};
+let activeBot = 'master';
+let symptomLog = [];
+
+function botSpecialistLabel(){
+  const el = document.getElementById('bot-specialist');
+  if (!el) return;
+  if (activeBot === 'master'){ el.innerHTML = '🧠 AyurBrain (master) — routing to best specialist'; el.style.background='#0f766e'; }
+  else { const b = BOT_INFO[activeBot]; el.innerHTML = b.emoji + ' ' + b.name + ' — active'; el.style.background='#16a34a'; }
+}
+function setActiveBot(id){ activeBot = id; botSpecialistLabel(); }
+
+async function q(url){ const r = await fetch(url); if(!r.ok) throw new Error('no-data'); return r.json(); }
+
+// ---- DOCTOR FINDER ----
+async function doctorsBot(text){
+  const t = text.toLowerCase();
+  const p = new URLSearchParams();
+  const specMap = {diabet:'Endocrinology',sugar:'Endocrinology',heart:'Cardiology',skin:'Dermatology',joint:'Orthopedics',arthr:'Orthopedics',digest:'Gastroenterology',child:'Pediatrics',pregnan:'Gynecology',mental:'Psychiatry',stress:'Psychiatry',sex:'Vajikarana',infert:'Vajikarana',panca:'Panchakarma',ayur:'Ayurveda General Practice',weight:'Ayurveda General Practice',thyroid:'Endocrinology'};
+  for (const k in specMap){ if(t.includes(k)) p.set('specialty', specMap[k]); }
+  ['india','kerala','delhi','mumbai','bangalore','usa','united states','uk','canada','dubai','singapore','australia'].forEach(c=>{ if(t.includes(c)) p.set('country', c==='usa'?'United States':c==='uk'?'United Kingdom':c.charAt(0).toUpperCase()+c.slice(1)); });
+  if(t.includes('video')||t.includes('online')) p.set('video','true');
+  if(t.includes('verified')) p.set('minRating','4.5');
+  p.set('sortBy','rating'); p.set('sortDir','desc'); p.set('limit','8');
+  let data; try { data = await q('/api/doctors?'+p.toString()); } catch(e){ return 'I couldn’t reach the doctor directory right now. Try again in a moment.'; }
+  if(!data.data || !data.data.length) return 'I searched our verified network but found no doctors matching that. Try a broader specialty or location — e.g. “Ayurvedic doctor in Kerala with video consult”.';
+  let h = '👨⚕️ <b>Found ' + data.total.toLocaleString() + ' matching doctor(s). Top picks:</b><br><div class="bot-cards">';
+  data.data.slice(0,6).forEach(d=>{ h += '<div class="bot-card"><div class="bot-card-title">'+d.name+'</div><div class="bot-card-sub">'+d.specialty+' • '+d.degree+' • ⭐'+d.rating+' ('+d.reviews+')</div><div class="bot-card-row">📍 '+d.city+', '+d.state+(d.country&&d.country!=='India'?', '+d.country:'')+' • '+d.experience+' yrs</div><div class="bot-card-row">'+ (d.consultationModes&&d.consultationModes.length? d.consultationModes.join(', '):'In-person') + (d.fee? ' • ₹'+d.fee+'/visit':'') +'</div><button class="bot-chip" onclick="openDoctorDetail(\''+d.id+'\')">View profile</button></div>'; });
+  h += '</div><br>💡 Want me to filter by fee, language, or teleconsult? Or say “book <b>'+data.data[0].name+'</b>”.';
+  return h;
+}
+// ---- HOSPITAL GUIDE ----
+async function hospitalsBot(text){
+  const t = text.toLowerCase(); const p = new URLSearchParams();
+  ['kerala','delhi','mumbai','bangalore','chennai','hyderabad','pune','jaipur','varanasi','rishikesh'].forEach(c=>{ if(t.includes(c)) p.set('state', c.charAt(0).toUpperCase()+c.slice(1)); });
+  if(t.includes('panca')) p.set('type','Panchakarma');
+  if(t.includes('gov')) p.set('type','Government');
+  if(t.includes('priv')) p.set('type','Private');
+  p.set('limit','6');
+  let data; try { data = await q('/api/hospitals?'+p.toString()); } catch(e){ return 'Hospital directory unavailable right now.'; }
+  if(!data.data || !data.data.length) return 'No hospitals matched. Try a state name like “Kerala” or “Panchakarma centres in Mumbai”.';
+  let h = '🏥 <b>'+data.total.toLocaleString()+' centre(s) found:</b><br><div class="bot-cards">';
+  data.data.slice(0,5).forEach(d=>{ h+='<div class="bot-card"><div class="bot-card-title">'+d.name+'</div><div class="bot-card-sub">'+d.type+' • '+d.rating+'★</div><div class="bot-card-row">📍 '+d.city+', '+d.state+'</div><div class="bot-card-row">🛏 '+ (d.beds||'—')+' beds • '+ (d.therapiesOffered? d.therapiesOffered.slice(0,3).join(', '):'') +'</div></div>'; });
+  h+='</div><br>💡 Ask for “treatment packages” or “Panchakarma in Kerala” for specifics.';
+  return h;
+}
+// ---- HERB INTELLIGENCE ----
+async function herbsBot(text){
+  const t = text.toLowerCase(); const p = new URLSearchParams();
+  const condMap = {diabet:'diabetes',sugar:'diabetes',immunit:'immunity',immune:'immunity',skin:'skin',acne:'skin',stress:'stress',anxiety:'anxiety',sleep:'sleep',insomnia:'sleep',digest:'digestion',acidity:'digestion',joint:'arthritis',arthr:'arthritis',hair:'hair',weight:'weight',cholesterol:'cholesterol',liver:'liver'};
+  for(const k in condMap){ if(t.includes(k)){ p.set('q', condMap[k]); break; } }
+  ['vata','pitta','kapha'].forEach(x=>{ if(t.includes(x)) p.set('dosha', x.charAt(0).toUpperCase()+x.slice(1)); });
+  if(t.includes('evidence')||t.includes('research')) p.set('evidence','High');
+  p.set('limit','6');
+  let data; try { data = await q('/api/herbs?'+p.toString()); } catch(e){ return 'Herb database unavailable right now.'; }
+  if(!data.data || !data.data.length) return 'No herbs matched that query. Try a condition like “diabetes”, “immunity”, “sleep”, or a dosha (Vata/Pitta/Kapha).';
+  let h = '🌿 <b>Top herb matches ('+data.total+'):</b><br><div class="bot-cards">';
+  data.data.slice(0,6).forEach(d=>{ h+='<div class="bot-card"><div class="bot-card-title">'+d.name+(d.sanskrit?' ('+d.sanskrit+')':'')+'</div><div class="bot-card-sub">'+ (d.category||'') +' • '+ (d.evidenceLevel||'') +' evidence</div><div class="bot-card-row">💪 '+ (d.primaryUses? d.primaryUses.slice(0,3).join(', '):'') +'</div><div class="bot-card-row">⚖️ Balances: '+ (d.doshaEffect||'all') +'</div></div>'; });
+  h+='</div><br>💡 Tell me your dosha or condition for a personalized formula. E.g. “herbs for Pitta digestion”.';
+  return h;
+}
+// ---- THERAPY ADVISOR ----
+async function therapiesBot(text){
+  const t = text.toLowerCase(); const p = new URLSearchParams();
+  ['vata','pitta','kapha'].forEach(x=>{ if(t.includes(x)) p.set('dosha', x.charAt(0).toUpperCase()+x.slice(1)); });
+  if(t.includes('detox')) p.set('q','detox'); if(t.includes('stress')) p.set('q','stress');
+  p.set('limit','6');
+  let data; try { data = await q('/api/therapies?'+p.toString()); } catch(e){ return 'Therapy database unavailable.'; }
+  if(!data.data || !data.data.length) return 'No therapies matched. Try “Panchakarma for Vata” or “detox therapy”.';
+  let h = '💆 <b>Recommended therapies ('+data.total+'):</b><br><div class="bot-cards">';
+  data.data.slice(0,5).forEach(d=>{ h+='<div class="bot-card"><div class="bot-card-title">'+d.name+'</div><div class="bot-card-sub">'+ (d.category||'') +' • '+ (d.duration||'') +'</div><div class="bot-card-row">⚖️ '+ (d.dosha? d.dosha.join(', '):'') +' • 💪 '+ (d.benefits? d.benefits.slice(0,2).join(', '):'') +'</div></div>'; });
+  h+='</div><br>💡 Ask for “full Panchakarma protocol for Kapha” to get a step plan.';
+  return h;
+}
+// ---- YOGA COACH ----
+async function yogaBot(text){
+  const t = text.toLowerCase(); const p = new URLSearchParams();
+  const ind = {back:'back pain',anx:'anxiety',stress:'stress',sleep:'insomnia',diabet:'diabetes',weight:'weight loss',breath:'breathing',digest:'digestion',flex:'flexibility',posture:'posture'};
+  for(const k in ind){ if(t.includes(k)){ p.set('indication', ind[k]); break; } }
+  if(t.includes('begin')) p.set('difficulty','Beginner'); if(t.includes('advanced')) p.set('difficulty','Advanced');
+  p.set('limit','6');
+  let data; try { data = await q('/api/yoga?'+p.toString()); } catch(e){ return 'Yoga library unavailable.'; }
+  if(!data.data || !data.data.length) return 'No practices matched. Try an indication like “back pain”, “anxiety”, “sleep”, or a level (beginner).';
+  let h = '🧘 <b>Yoga & breathing for you ('+data.total+'):</b><br><div class="bot-cards">';
+  data.data.slice(0,5).forEach(d=>{ h+='<div class="bot-card"><div class="bot-card-title">'+d.name+'</div><div class="bot-card-sub">'+ (d.category||'') +' • '+ (d.difficulty||'') +'</div><div class="bot-card-row">🎯 '+ (d.indication? d.indication.slice(0,2).join(', '):'') +'</div><div class="bot-card-row">⏱ '+ (d.duration||'') +' • 🔥 '+ (d.calories||'—') +' kcal</div></div>'; });
+  h+='</div><br>💡 Ask “15-min yoga sequence for anxiety” and I’ll build one.';
+  return h;
+}
+// ---- DIAGNOSIS ENGINE ----
+async function healthBot(text){
+  const t = text.toLowerCase();
+  if(t.includes('condition')||t.includes('disease')||t.includes('what is')||t.includes('about')){ const m=t.match(/(?:about|is|condition)\s+([a-z ]+)/); const qy = m? m[1].trim(): t; try{ const d=await q('/api/health-benefits?q='+encodeURIComponent(qy)+'&limit=5'); if(d.data&&d.data.length){ const c=d.data[0]; let h='❤️ <b>'+c.name+(c.ayurvedicName?' ('+c.ayurvedicName+')':'')+'</b> ['+c.category+', '+c.severity+']<br>'; h+='🔥 Dosha imbalance: '+ (c.doshaImbalance||'—') +'<br>🤒 Symptoms: '+ (c.symptoms?c.symptoms.slice(0,5).join(', '):'') +'<br>🌿 Herbs: '+ (c.herbs?c.herbs.slice(0,5).join(', '):'') +'<br>🍽 Diet: '+ (c.diet?c.diet.slice(0,3).join(', '):'') +'<br>🧘 Yoga: '+ (c.yoga?c.yoga.slice(0,3).join(', '):''); return h+'<br>💡 Ask “treatment plan for '+c.name+'" for the full protocol.'; } }catch(e){} }
+  // symptom-based diagnosis
+  const symLine = text.replace(/^(i have|i am having|suffering from|symptoms?|i feel|feeling|experiencing|having)\s*:?/i,'').trim();
+  const syms = symLine.toLowerCase().split(/[,\n.]/).map(s=>s.trim()).filter(Boolean).slice(0,12);
+  if(!syms.length) return 'Tell me your symptoms (e.g. “I have fatigue, bloating and poor sleep”) and I’ll match them to conditions with full Ayurvedic treatment plans.';
+  let res; try { res = await q('/api/diagnose'); } catch(e){}
+  try { res = await fetch('/api/diagnose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symptoms:syms})}).then(r=>r.json()); } catch(e){ return 'Diagnosis engine unavailable right now.'; }
+  if(!res || !res.diagnoses || !res.diagnoses.length) return 'I couldn’t match those symptoms confidently. Try listing 2-4 specific symptoms (e.g. “burning sensation, acidity, irritability”).';
+  let h = '❤️ <b>Top diagnosis matches for:</b> '+syms.join(', ')+'<br><br>';
+  res.diagnoses.slice(0,3).forEach((dx,i)=>{ h+='<b>'+(i+1)+'. '+dx.name+'</b> — '+(dx.matchPercent||dx.confidence||'')+' match<br>'; h+='🔥 Dosha: '+ (dx.doshaImbalance||'—') +'<br>🌿 Herbs: '+ (dx.herbs&&dx.herbs.length? dx.herbs.slice(0,4).join(', '):'—') +'<br>🍽 Diet: '+ (dx.diet&&dx.diet.length? dx.diet.slice(0,3).join(', '):'—') +'<br>🧘 Yoga: '+ (dx.yoga&&dx.yoga.length? dx.yoga.slice(0,2).join(', '):'—') +'<br>'; if(dx.doctors&&dx.doctors.length){ h+='👨⚕️ Specialists: '+ dx.doctors.slice(0,2).map(x=>x.name+' ('+x.specialty+')').join(', ') +'<br>'; } h+='<br>'; });
+  h+='💡 Say “treatment plan for '+res.diagnoses[0].name+'" for the full protocol, or “book a doctor for '+res.diagnoses[0].name+'”.';
+  return h;
+}
+// ---- ANALYTICS ORACLE ----
+async function analyticsBot(){
+  let s; try { s = await q('/api/stats'); } catch(e){ return 'Analytics feed unavailable.'; }
+  if(!s) return 'No stats right now.';
+  return '📊 <b>Network Insights:</b><br>• 👨⚕️ '+s.doctors.toLocaleString()+' doctors across '+ (s.countries||30) +' countries<br>• 🏥 '+s.hospitals.toLocaleString()+' hospitals • 🌿 '+s.herbs.toLocaleString()+' herbs<br>• 📅 '+ (s.appointments||0).toLocaleString()+' appointments • ⭐ '+ (s.reviews||0).toLocaleString()+' reviews<br>• 🔥 Most-searched: '+(s.topSearches&&s.topSearches.length? s.topSearches.slice(0,4).join(', '):'diabetes, PCOS, arthritis')+'<br>• 🌍 Top regions: '+(s.topRegions&&s.topRegions.length? s.topRegions.slice(0,4).join(', '):'Kerala, Maharashtra, Delhi')+'<br><br>💡 Ask “where is demand highest for diabetes care?” for a deeper read.';
+}
+// ---- APPOINTMENT BOT ----
+async function appointmentsBot(text){
+  const t = text.toLowerCase(); let p = new URLSearchParams();
+  p.set('limit','6'); if(t.includes('today')) p.set('q','today');
+  let data; try { data = await q('/api/appointments?'+p.toString()); } catch(e){ return 'Couldn’t load appointments.'; }
+  if(!data.data || !data.data.length) return 'No appointments in the system. Say “book an appointment” and I’ll open the scheduler.';
+  let h = '📅 <b>Your recent appointments ('+data.total+'):</b><br><div class="bot-cards">';
+  data.data.slice(0,5).forEach(a=>{ h+='<div class="bot-card"><div class="bot-card-title">'+a.doctorName+'</div><div class="bot-card-sub">'+a.department+' • '+a.status+'</div><div class="bot-card-row">🗓 '+a.date+' at '+a.time+' • '+a.mode+'</div><div class="bot-card-row">'+a.patientName+'</div></div>'; });
+  h+='</div><br>💡 Say “book an appointment” to schedule, or “remind me of tomorrow’s appointments”.';
+  return h;
+}
+// ---- TRACKER BOT ----
+async function trackerBot(text){
+  const t = text.toLowerCase(); let p = new URLSearchParams();
+  if(t.includes('glucose')||t.includes('sugar')) p.set('type','Glucose'); if(t.includes('bp')||t.includes('pressure')) p.set('type','Blood Pressure'); if(t.includes('weight')) p.set('type','Weight'); if(t.includes('sleep')) p.set('type','Sleep'); if(t.includes('dosha')) p.set('type','Dosha');
+  let data; try { data = await q('/api/tracker?'+p.toString()); } catch(e){ return 'Health tracker unavailable.'; }
+  if(!data.data || !data.data.length) return 'No tracked records yet. Add a reading and I’ll interpret trends & dosha balance.';
+  const vals = data.data.map(r=>parseFloat(r.value)).filter(v=>!isNaN(v));
+  const avg = vals.length? (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1):'—';
+  let h = '📈 <b>'+ (data.metric||'Health') +' tracker:</b><br>• Records: '+data.total+'<br>• Average: '+avg+(data.unit||'')+'<br>• Latest: '+data.data[0].value+(data.unit||'')+' on '+data.data[0].date+'<br>';
+  if(data.avg!==undefined) h+='• Trend: '+(data.trend||'stable')+'<br>';
+  h+='<br>💡 I can flag dosha imbalance from your vitals — try “interpret my dosha from BP”.';
+  return h;
+}
+// ---- WELLNESS REMINDER BOT (Dinacharya) ----
+async function reminderBot(text){
+  const t = text.toLowerCase();
+  const wakes='6:00 AM', oil='6:30 AM (Abhyanga self-massage + oil pulling)', exercise='7:00 AM (yoga/brisk walk)', breakfast='8:00 AM (warm cooked meal, ginger tea)', lunch='12:30 PM (largest meal, digestive fire peak)', dinner='7:00 PM (light, before sunset)', sleep='10:00 PM';
+  if(t.includes('medicat')||t.includes('pill')||t.includes('tablet')) return '⏰ <b>Medication / Herbal Reminder plan:</b><br>• 🌅 Morning: Triphala + warm water on empty stomach<br>• 🍽 With lunch: your prescribed Churna/tablets<br>• 🌙 Evening: Ashwagandha (if prescribed) 1 hr before sleep<br>• 💧 Hydration: 8 glasses, avoid ice-cold<br><br>💡 Tell me your condition (e.g. “diabetes meds”) and I’ll tailor the timing.';
+  if(t.includes('herb')) return '⏰ <b>Herbal intake reminders:</b><br>• Morning: Tulsi/Giloy kadha<br>• Mid-morning: Amla juice<br>• Evening: Turmeric milk (Haldi doodh)<br><br>💡 Ask “remind me to take Ashwagandha” for a personal slot.';
+  return '⏰ <b>Your Ayurvedic Daily Routine (Dinacharya):</b><br>• 🌅 Wake: '+wakes+'<br>• 💆 Abhyanga & oil pull: '+oil+'<br>• 🏃 Movement: '+exercise+'<br>• 🍳 Breakfast: '+breakfast+'<br>• ☀️ Lunch (peak Agni): '+lunch+'<br>• 🌙 Light dinner: '+dinner+'<br>• 😴 Sleep: '+sleep+'<br><br>💡 Say “remind me about medications” or “herbal reminders” and I’ll build a checklist you can follow.';
+}
+// ---- SYMPTOM TRACKER BOT ----
+async function symptomBot(text){
+  const t = text.toLowerCase();
+  const log = (typeof symptomLog!=='undefined' && Array.isArray(symptomLog))? symptomLog : [];
+  if(t.includes('log')||t.includes('add')||t.includes('record')){
+    const s = text.replace(/^(log|add|record|track)\s*/i,'').trim();
+    try { if(typeof symptomLog!=='undefined'){ symptomLog.push({text:s, at:new Date().toISOString().slice(0,10)}); } } catch(e){}
+    return '🩺 Logged “'+s+'” to your symptom diary ('+ (log.length+1) +' entries). I’ll watch for clusters that match conditions and alert you early. Keep logging daily for a trend.';
+  }
+  if(log.length){ const freq={}; log.forEach(x=>freq[x.text]=(freq[x.text]||0)+1); const top=Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,4); return '🩺 <b>Your logged symptoms:</b><br>• '+ top.map(([k,v])=>k+' ('+v+')').join('<br>• ')+'<br><br>💡 Say “log <symptom>” to add another, or “am I at risk” for an early check.'; }
+  return '🩺 The Symptom Tracker helps you spot patterns early. Just say “log fatigue”, “log bloating” etc. and I’ll build a timeline, flag recurring clusters, and cross-check against our 51-condition database for early warnings. Try: “log headache”.';
+}
+// ---- OUTBREAK MONITOR BOT ----
+async function outbreakBot(text){
+  let snap; try { snap = await q('/api/live/snapshot'); } catch(e){}
+  const season = (snap && snap.alert && snap.alert.region) ? snap.alert.region : 'your region';
+  const msg = (snap && snap.alert && snap.alert.message) ? snap.alert.message : 'Seasonal shifts can aggravate Vata & Kapha — keep warm, hydrate, favour cooked meals.';
+  return '🦠 <b>Outbreak & Wellness Monitor ('+season+'):</b><br>• 🔔 Active alert: '+msg+'<br>• 🌿 Preventives: Tulsi-Giloy kadha, Turmeric milk, steam inhalation<br>• 🤒 Watch for: seasonal flu, dengue, digestive infections<br>• 🩺 If fever >3 days or breathlessness — consult a doctor immediately<br><br>💡 I pull this from the live health feed. Ask “live updates” for the current ticker.';
+}
+// ---- AI HERB-FINDER BOT (reverse match from symptoms + dosha) ----
+async function herbAIBot(text){
+  const t = text.toLowerCase();
+  const syms = t.replace(/^(find|herb|for|my|i have|suffering from|help with)\\s*/g,'').split(/[,\n.]/).map(s=>s.trim()).filter(Boolean).slice(0,8);
+  // reverse lookup: search herbs by the symptom/condition words
+  let found=[];
+  for(const w of syms){ if(w.length<3) continue; try{ const d=await q('/api/herbs?q='+encodeURIComponent(w)+'&limit=6'); if(d.data) found=found.concat(d.data.map(h=>({h, via:w}))); }catch(e){} }
+  // dedupe by name
+  const seen={}; const unique=[]; found.forEach(o=>{ if(!seen[o.h.name]){ seen[o.h.name]=1; unique.push(o);} });
+  if(!unique.length) return '🤖 Tell me your symptoms or goal and I’ll reverse-match the best herbs. E.g. “herbs for fatigue and low immunity, Pitta type”.';
+  let h='🤖 <b>AI Herb-Finder — matched from your input:</b><br><div class="bot-cards">';
+  unique.slice(0,6).forEach(o=>{ const d=o.h; h+='<div class="bot-card"><div class="bot-card-title">'+d.name+(d.sanskrit?' ('+d.sanskrit+')':'')+'</div><div class="bot-card-sub">'+(d.category||'')+' • '+(d.evidenceLevel||'')+' evidence</div><div class="bot-card-row">💪 '+(d.primaryUses?d.primaryUses.slice(0,3).join(', '):'')+'</div><div class="bot-card-row">⚖️ Balances: '+(d.doshaEffect||'all')+'</div><div class="bot-card-row">🔎 matched via “'+o.via+'”</div></div>'; });
+  h+='</div><br>💡 Say “treatment plan for <condition>” or “book a doctor” to go further.';
+  return h;
+}
+const BOT_FUNCS = {doctors:doctorsBot, hospitals:hospitalsBot, herbs:herbsBot, therapies:therapiesBot, yoga:yogaBot, health:healthBot, analytics:analyticsBot, appointments:appointmentsBot, tracker:trackerBot, reminder:reminderBot, symptom:symptomBot, outbreak:outbreakBot, herbai:herbAIBot};
+
+// Master router: chooses best specialist from intent + current section
+function pickSpecialist(text){
+  const t = text.toLowerCase();
+  if(t.match(/\b(doctor|specialist|physician|consult|clinic near)/)) return 'doctors';
+  if(t.match(/\b(hospital|centre|center|panchakarma centre)/)) return 'hospitals';
+  if(t.match(/\(herb|herbs|herbal|plant|medicine|remedy|dosha|rasayana|ashwagandha|triphala|turmeric|neem|amla|tulsi)\\b/)) return 'herb';
+  if(t.match(/\b(therap|panchakarma|abhyanga|basti|virechan|massage)/)) return 'therapies';
+  if(t.match(/\b(yoga|asana|pranayama|meditat|exercise)/)) return 'yoga';
+  if(t.match(/\b(symptom|diagnos|disease|condition|i have|suffering|treatment plan|dosha imbalance)/)) return 'health';
+  if(t.match(/\b(stat|analytics|insight|trend|demand|popular)/)) return 'analytics';
+  if(t.match(/\b(appointment|booking|schedule|remind|slot)/)) return 'appointments';
+  if(t.match(/\b(track|vitals|glucose|blood pressure|weight|sleep score|metric|reading)/)) return 'tracker';
+  if(t.match(/\b(remind|routine|dinacharya|daily schedule|medication time|herbal reminder)/)) return 'reminder';
+  if(t.match(/\b(log symptom|symptom diary|track my symptom|record symptom)/)) return 'symptom';
+  if(t.match(/\b(outbreak|epidemic|disease spread|seasonal alert|virus|flu season)/)) return 'outbreak';
+  if(t.match(/\b(ai herb|reverse herb|find herb|herb from symptom|match herb)/)) return 'herbai';
+  return null;
+}
+async function ayurBrain(text){
+  const picked = pickSpecialist(text) || (currentSection && BOT_FUNCS[currentSection] ? currentSection : null);
+  if(picked){ setActiveBot(picked); const r = await BOT_FUNCS[picked](text); return r; }
+  // generic: let the existing assistant handle it (live/tip/book/etc)
+  setActiveBot('master'); return null;
+}
+// Wrap botSend so the master routes first
+const _origHandle = handleBot;
+handleBot = async function(text){
+  const routed = await ayurBrain(text);
+  if(routed !== null) return routed;
+  return _origHandle(text);
+};
+// Per-section smart chips
+function botChipsFor(section){
+  const map = {
+    doctors: [{label:'👨⚕️ Find Ayurvedic doctor',q:'Find me an Ayurvedic doctor'},{label:'🩺 Diabetes specialist',q:'diabetes doctor'},{label:'📹 Video consult',q:'doctor with video consult'},{label:'🇮🇳 Kerala doctors',q:'Ayurvedic doctor in Kerala'}],
+    hospitals: [{label:'🏥 Panchakarma in Kerala',q:'Panchakarma centres in Kerala'},{label:'🏛 Government centres',q:'government Ayurvedic hospitals'},{label:'🛏 With IPD',q:'hospitals with inpatient'}],
+    herbs: [{label:'🌿 Herbs for diabetes',q:'herbs for diabetes'},{label:'💪 Immunity boost',q:'herbs for immunity'},{label:'😴 Sleep aid',q:'herbs for sleep'},{label:'🔥 For Pitta',q:'herbs for Pitta dosha'}],
+    therapies: [{label:'💆 Vata therapy',q:'Panchakarma for Vata'},{label:'🧘 Stress relief',q:'therapy for stress'},{label:'🥗 Detox',q:'detox therapy'}],
+    yoga: [{label:'🧘 For back pain',q:'yoga for back pain'},{label:'😌 Anxiety',q:'yoga for anxiety'},{label:'😴 Sleep',q:'yoga for insomnia'},{label:'🌬 Pranayama',q:'breathing for stress'}],
+    health: [{label:'❤️ Diagnose symptoms',q:'I have fatigue and bloating'},{label:'🩺 Treatment plan',q:'treatment plan for arthritis'},{label:'🔥 My dosha',q:'what is my dosha imbalance'}],
+    analytics: [{label:'📊 Network insights',q:'show analytics'},{label:'🔥 Top searches',q:'what are people searching'}],
+    appointments: [{label:'📅 My appointments',q:'my appointments'},{label:'➕ Book now',action:'book'}],
+    tracker: [{label:'📈 My glucose',q:'track my glucose'},{label:'💓 Blood pressure',q:'track my blood pressure'},{label:'⚖️ Weight trend',q:'my weight'}],
+    reminder: [{label:'⏰ My daily routine',q:'my daily Ayurvedic routine'},{label:'💊 Med reminders',q:'remind me about medications'},{label:'🌿 Herbal reminders',q:'herbal reminders'}],
+    symptom: [{label:'🩺 Log a symptom',q:'log fatigue'},{label:'📋 My symptom diary',q:'show my symptom diary'},{label:'⚠️ Am I at risk',q:'am I at risk from my symptoms'}],
+    outbreak: [{label:'🦠 Outbreak monitor',q:'outbreak monitor'},{label:'🌍 Regional alerts',q:'regional wellness alerts'},{label:'🛡 Preventives',q:'what preventives for this season'}],
+    herbai: [{label:'🤖 AI herb match',q:'ai herb for fatigue and low immunity'},{label:'🔁 Reverse find',q:'find herbs from my symptoms'},{label:'🌿 For Pitta + acne',q:'ai herb for acne pitta type'}]
+  };
+  return map[section] || null;
+}
+// richer greeting chips
+function botGreetingV2(){
+  botAdd('bot','🙏 Namaste! I’m <b>AyurBrain</b> — your super-intelligent Ayurveda assistant with a specialist bot for every section:<br>• 👨⚕️ Doctor Finder • 🏥 Hospital Guide • 🌿 Herb Intelligence • 💆 Therapy Advisor • 🧘 Yoga Coach • ❤️ Diagnosis Engine • 📊 Analytics Oracle • 📅 Appointment Bot • 📈 Health Tracker.<br><br>I auto-route your question to the right specialist and reason over live data. Try a question, or open any section and I’ll switch to that section’s expert.');
+  renderChips([
+    {label:'🩺 Diagnose my symptoms',q:'I have symptoms'},
+    {label:'🔍 Find a doctor',q:'Find me an Ayurvedic doctor'},
+    {label:'🌿 Herbs for diabetes',q:'Which herbs help with diabetes?'},
+    {label:'📡 Live health updates',q:'Show live updates'},
+    {label:'💡 Daily tip',q:'Give me a daily tip'},
+    {label:'📅 Book appointment',action:'book'}
+  ]);
+}
+// When opening a section, switch the active specialist + offer chips
+const _origTabClick = (function(){ return null; })();
+function notifyBotSection(section){
+  if(!botOpen) return;
+  const info = BOT_INFO[section]; if(!info) return;
+  setActiveBot(section);
+  botAdd('bot','🤖 Switched to <b>'+info.emoji+' '+info.name+'</b> — '+info.role+'. Ask me anything about this section.');
+  const chips = botChipsFor(section); if(chips) renderChips(chips);
+}
+// hook into tab clicks
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => { setTimeout(()=>notifyBotSection(tab.dataset.section), 350); });
+});
+
+// override greeting
+botGreeting = botGreetingV2;
+
+// Restore any existing session in the header on load + start live feed (defensive)
+try {
+  renderAuthArea();
+} catch(e) { console.error('renderAuthArea failed', e); }
+try {
+  document.getElementById('liveBar').addEventListener('click', openLiveHealth);
+} catch(e) { console.error('liveBar click bind failed', e); }
+try {
+  connectLive();
+} catch(e) { console.error('connectLive failed', e); startLivePolling(); }
  </script>
 
 <!-- SEO KEYWORD FOOTER -->

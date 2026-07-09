@@ -12,3 +12,5 @@ run-detached.bat
 _bot_block.html
 _botcheck.js
 .DS_Store
+data/store.json
+data/store.json.tmp

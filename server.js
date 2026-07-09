@@ -17,6 +17,8 @@ const { generateAppointments } = require('./data/appointments');
 const { generateHealthTracker } = require('./data/healthTracker');
 const { generateFavorites } = require('./data/favorites');
 const { generateAnalytics } = require('./data/analytics');
+const store = require('./data/store');
+const auth = require('./lib/auth');
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
@@ -29,7 +31,7 @@ app.use((err, req, res, next) => {
 process.on('uncaughtException', (e) => console.error('uncaughtException:', e.message));
 process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message));
 
-// Load data once at startup (doctors is mutable so real registrations append)
+// Load data once at startup
 let doctors = generateDoctors();
 const hospitals = generateHospitals();
 const herbs = generateInfiniteHerbs();
@@ -41,29 +43,57 @@ const healthTracker = generateHealthTracker();
 const favorites = generateFavorites();
 const analytics = generateAnalytics();
 
-// In-memory patient reviews per doctor (seeded with a few for generated doctors)
-const doctorReviews = new Map(); // doctorId -> [ {patient, rating, comment, date} ]
+// ---- Persistent user-data store (registered doctors, reviews, bookings, OTPs, sessions) ----
+const DB = store.get();
+// Seed a few genuine-style reviews into the store for generated doctors (once)
+const SAMPLE_COMMENTS = [
+  'Very knowledgeable and patient. Explained the Ayurvedic approach clearly.',
+  'Helped me a lot with my chronic issue. Highly recommended.',
+  'Good experience, the Panchakarma therapy was well managed.',
+  'Professional and caring. Follow-up was prompt.'
+];
 doctors.forEach(d => {
-  const n = (d.id.charCodeAt(d.id.length - 1) + d.id.charCodeAt(d.id.length - 2)) % 4; // 0..3 deterministic
+  if (DB.reviews[d.id]) return; // already have reviews
+  const n = (d.id.charCodeAt(d.id.length - 1) + d.id.charCodeAt(d.id.length - 2)) % 4;
   if (n > 0) {
-    const sampleComments = [
-      'Very knowledgeable and patient. Explained the Ayurvedic approach clearly.',
-      'Helped me a lot with my chronic issue. Highly recommended.',
-      'Good experience, the Panchakarma therapy was well managed.',
-      'Professional and caring. Follow-up was prompt.'
-    ];
     const revs = [];
     for (let i = 0; i < n; i++) {
       revs.push({
+        id: 'rv_' + d.id + '_' + i,
         patient: 'Patient ' + (1000 + (d.id.charCodeAt(3) + i * 37) % 9000),
-        rating: 4 + ((d.rating >= 4.5 ? 1 : 0)),
-        comment: sampleComments[(i + d.id.length) % sampleComments.length],
+        rating: 4 + (d.rating >= 4.5 ? 1 : 0),
+        comment: SAMPLE_COMMENTS[(i + d.id.length) % SAMPLE_COMMENTS.length],
+        doctorReply: '',
         date: new Date(Date.now() - (i + 1) * 86400000 * 7).toISOString().slice(0, 10)
       });
     }
-    doctorReviews.set(d.id, revs);
+    DB.reviews[d.id] = revs;
   }
 });
+store.save();
+// Merge registered doctors into the live list
+function mergeRegisteredDoctors() {
+  doctors = doctors.filter(d => !d.registered); // drop previous merge to avoid dupes
+  DB.registeredDoctors.forEach(rd => { if (!doctors.find(d => d.id === rd.id)) doctors.unshift(rd); });
+}
+mergeRegisteredDoctors();
+
+// Helper: get reviews for a doctor (from store)
+function getReviews(doctorId) {
+  const list = DB.reviews[doctorId] || [];
+  const d = doctors.find(x => x.id === doctorId);
+  const avg = list.length ? (list.reduce((s, r) => s + r.rating, 0) / list.length) : (d ? d.rating : 0);
+  return { reviews: list, average: parseFloat(avg.toFixed(1)), count: list.length };
+}
+function recomputeDoctorRating(doctorId) {
+  const list = DB.reviews[doctorId] || [];
+  const d = doctors.find(x => x.id === doctorId);
+  if (!d) return;
+  if (list.length) {
+    d.ratingCount = list.length;
+    d.rating = parseFloat((list.reduce((s, r) => s + r.rating, 0) / list.length).toFixed(1));
+  }
+}
 
 console.log('Data loaded:');
 console.log('  Doctors:', doctors.length);
@@ -217,13 +247,42 @@ app.get('/api/doctors/:id', (req, res) => {
   res.json(d);
 });
 
-// ---------- DOCTOR REGISTRATION (real doctors sign up) ----------
+// ---------- OTP (email/SMS pluggable; dev returns code in response) ----------
+function sendOtp(destination, code, purpose) {
+  // Pluggable: hook real email/SMS here. In dev we just log + return for UI.
+  console.log(`[OTP:${purpose}] ${destination} -> ${code}`);
+  return { devCode: code };
+}
+app.post('/api/otp/request', (req, res) => {
+  const { destination, purpose = 'registration' } = req.body || {};
+  if (!destination) return res.status(400).json({ error: 'destination required' });
+  const code = String(100000 + Math.floor(Math.random() * 900000));
+  DB.otps[destination] = { code, expires: Date.now() + 10 * 60 * 1000, purpose, used: false };
+  store.save();
+  const dev = sendOtp(destination, code, purpose);
+  res.json({ success: true, message: 'OTP sent', devCode: dev.devCode });
+});
+app.post('/api/otp/verify', (req, res) => {
+  const { destination, code } = req.body || {};
+  const rec = DB.otps[destination];
+  if (!rec || rec.used || rec.expires < Date.now() || rec.code !== String(code))
+    return res.status(400).json({ error: 'Invalid or expired OTP' });
+  rec.used = true; store.save();
+  res.json({ success: true, verified: true });
+});
+
+// ---------- DOCTOR REGISTRATION (real doctors sign up, OTP-verified) ----------
 app.post('/api/doctors/register', (req, res) => {
   const b = req.body || {};
-  const required = ['name', 'specialty', 'degree', 'country', 'city', 'phone'];
+  const required = ['name', 'specialty', 'degree', 'country', 'city', 'phone', 'otp', 'otpDest'];
   const missing = required.filter(k => !b[k]);
   if (missing.length) return res.status(400).json({ error: 'Missing required fields: ' + missing.join(', ') });
-  const id = 'DOC' + String(100000 + doctors.length).padStart(6, '0');
+  const rec = DB.otps[b.otpDest];
+  if (!rec || rec.used || rec.expires < Date.now() || rec.code !== String(b.otp) || rec.purpose !== 'registration')
+    return res.status(400).json({ error: 'Phone/email OTP not verified. Please verify first.' });
+  rec.used = true;
+  const id = 'DOC' + String(100000 + DB.registeredDoctors.length + 1).padStart(6, '0');
+  const password = (b.password && b.password.length >= 6) ? b.password : (b.phone.replace(/\D/g, '').slice(-6) || 'changeme');
   const newDoc = {
     id,
     name: b.name.startsWith('Dr') ? b.name : 'Dr. ' + b.name,
@@ -251,31 +310,130 @@ app.post('/api/doctors/register', (req, res) => {
     awards: null,
     totalPatients: 0,
     verified: false,
+    registered: true,
+    password,
     registeredAt: new Date().toISOString()
   };
-  doctors.unshift(newDoc);
-  res.status(201).json({ success: true, doctor: newDoc });
+  DB.registeredDoctors.unshift(newDoc);
+  store.save();
+  mergeRegisteredDoctors();
+  const token = auth.createSession('doctor', id, { name: newDoc.name, phone: newDoc.phone });
+  DB.sessions[token] = { role: 'doctor', refId: id, expires: Date.now() + 7 * 864e5 };
+  store.save();
+  res.status(201).json({ success: true, doctor: newDoc, token });
 });
 
-// ---------- PATIENT REVIEWS ----------
-app.get('/api/doctors/:id/reviews', (req, res) => {
-  const list = doctorReviews.get(req.params.id) || [];
-  const d = doctors.find(x => x.id === req.params.id);
-  const avg = list.length ? (list.reduce((s, r) => s + r.rating, 0) / list.length) : (d ? d.rating : 0);
-  res.json({ reviews: list, average: avg.toFixed(1), count: list.length });
+// ---------- DOCTOR LOGIN (phone+password or phone+OTP) ----------
+app.post('/api/doctors/login', (req, res) => {
+  const { phone, password, otp, otpDest } = req.body || {};
+  const doc = DB.registeredDoctors.find(d => d.phone === phone);
+  if (!doc) return res.status(404).json({ error: 'No registered doctor with this phone' });
+  if (otp) {
+    const rec = DB.otps[otpDest || phone];
+    if (!rec || rec.used || rec.expires < Date.now() || rec.code !== String(otp))
+      return res.status(400).json({ error: 'Invalid OTP' });
+    rec.used = true;
+  } else {
+    if (!password || doc.password !== password) return res.status(401).json({ error: 'Wrong password' });
+  }
+  const token = auth.createSession('doctor', doc.id, { name: doc.name, phone: doc.phone });
+  DB.sessions[token] = { role: 'doctor', refId: doc.id, expires: Date.now() + 7 * 864e5 };
+  store.save();
+  res.json({ success: true, token, doctor: { id: doc.id, name: doc.name, verified: doc.verified } });
 });
+
+// ---------- DOCTOR DASHBOARD ----------
+app.get('/api/doctor/me', auth.requireAuth(['doctor']), (req, res) => {
+  const doc = DB.registeredDoctors.find(d => d.id === req.user.refId);
+  if (!doc) return res.status(404).json({ error: 'Doctor not found' });
+  const myReviews = DB.reviews[doc.id] || [];
+  const myBookings = DB.bookings.filter(b => b.doctorId === doc.id);
+  res.json({ doctor: doc, reviews: myReviews, bookings: myBookings });
+});
+app.put('/api/doctor/me', auth.requireAuth(['doctor']), (req, res) => {
+  const doc = DB.registeredDoctors.find(d => d.id === req.user.refId);
+  if (!doc) return res.status(404).json({ error: 'Doctor not found' });
+  const ok = ['clinic', 'address', 'availableDays', 'availableHours', 'consultationFee', 'consultationModes', 'languages', 'experience', 'email'];
+  ok.forEach(k => { if (req.body[k] !== undefined) doc[k] = req.body[k]; });
+  store.save(); mergeRegisteredDoctors();
+  res.json({ success: true, doctor: doc });
+});
+app.post('/api/doctor/reviews/:reviewId/reply', auth.requireAuth(['doctor']), (req, res) => {
+  const list = DB.reviews[req.user.refId] || [];
+  const rv = list.find(r => r.id === req.params.reviewId);
+  if (!rv) return res.status(404).json({ error: 'Review not found' });
+  rv.doctorReply = (req.body && req.body.reply) || '';
+  store.save();
+  res.json({ success: true, review: rv });
+});
+app.delete('/api/doctor/reviews/:reviewId', auth.requireAuth(['doctor']), (req, res) => {
+  const list = DB.reviews[req.user.refId] || [];
+  const idx = list.findIndex(r => r.id === req.params.reviewId);
+  if (idx < 0) return res.status(404).json({ error: 'Review not found' });
+  list.splice(idx, 1);
+  store.save(); recomputeDoctorRating(req.user.refId);
+  res.json({ success: true });
+});
+// Booking management (doctor confirms/cancels)
+app.put('/api/doctor/bookings/:id', auth.requireAuth(['doctor']), (req, res) => {
+  const bk = DB.bookings.find(b => b.id === req.params.id && b.doctorId === req.user.refId);
+  if (!bk) return res.status(404).json({ error: 'Booking not found' });
+  if (req.body.status) bk.status = req.body.status;
+  store.save();
+  res.json({ success: true, booking: bk });
+});
+
+// ---------- PATIENT BOOKING (anyone books a doctor) ----------
+app.post('/api/doctors/:id/book', (req, res) => {
+  const d = doctors.find(x => x.id === req.params.id);
+  if (!d) return res.status(404).json({ error: 'Doctor not found' });
+  const { patientName, phone, email, date, time, mode, reason } = req.body || {};
+  if (!patientName || !phone || !date) return res.status(400).json({ error: 'patientName, phone and date required' });
+  const bk = {
+    id: 'BK' + String(Date.now()), doctorId: d.id, doctorName: d.name,
+    patientName, phone, email: email || '', date, time: time || '', mode: mode || 'In-person',
+    reason: reason || '', status: 'Pending', createdAt: new Date().toISOString()
+  };
+  DB.bookings.push(bk); store.save();
+  res.status(201).json({ success: true, booking: bk });
+});
+
+// ---------- PATIENT REVIEWS (persistent) ----------
+app.get('/api/doctors/:id/reviews', (req, res) => { res.json(getReviews(req.params.id)); });
 app.post('/api/doctors/:id/reviews', (req, res) => {
   const d = doctors.find(x => x.id === req.params.id);
   if (!d) return res.status(404).json({ error: 'Doctor not found' });
   const { patient, rating, comment } = req.body || {};
   if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'Rating must be 1-5' });
-  const list = doctorReviews.get(d.id) || [];
-  list.unshift({ patient: patient || 'Anonymous', rating: parseInt(rating), comment: comment || '', date: new Date().toISOString().slice(0, 10) });
-  doctorReviews.set(d.id, list);
-  // Recompute displayed rating
-  d.ratingCount = list.length;
-  d.rating = parseFloat((list.reduce((s, r) => s + r.rating, 0) / list.length).toFixed(1));
-  res.status(201).json({ success: true, reviews: list, average: d.rating, count: list.length });
+  if (!DB.reviews[d.id]) DB.reviews[d.id] = [];
+  const rv = { id: 'rv_' + d.id + '_' + Date.now(), patient: patient || 'Anonymous', rating: parseInt(rating), comment: comment || '', doctorReply: '', date: new Date().toISOString().slice(0, 10) };
+  DB.reviews[d.id].unshift(rv);
+  store.save();
+  recomputeDoctorRating(d.id);
+  const out = getReviews(d.id);
+  res.status(201).json({ success: true, reviews: out.reviews, average: out.average, count: out.count });
+});
+
+// ---------- ADMIN VERIFICATION PANEL ----------
+app.post('/api/admin/login', (req, res) => {
+  const { username, password } = req.body || {};
+  const admin = DB.admins.find(a => a.username === username && a.password === password);
+  if (!admin) return res.status(401).json({ error: 'Invalid admin credentials' });
+  const token = auth.createSession('admin', admin.username, { name: admin.name });
+  DB.sessions[token] = { role: 'admin', refId: admin.username, expires: Date.now() + 7 * 864e5 };
+  store.save();
+  res.json({ success: true, token, admin: { username: admin.username, name: admin.name } });
+});
+app.get('/api/admin/unverified', auth.requireAuth(['admin']), (req, res) => {
+  res.json({ doctors: DB.registeredDoctors.filter(d => !d.verified) });
+});
+app.post('/api/admin/verify/:id', auth.requireAuth(['admin']), (req, res) => {
+  const doc = DB.registeredDoctors.find(d => d.id === req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Doctor not found' });
+  doc.verified = req.body && req.body.action === 'reject' ? false : true;
+  doc.verificationStatus = (req.body && req.body.action === 'reject') ? 'rejected' : 'verified';
+  store.save();
+  res.json({ success: true, doctor: doc });
 });
 
 
@@ -345,14 +503,15 @@ app.get('/api/herbs', (req, res) => {
   let results = [...herbs];
   if (q) {
     const term = q.toLowerCase();
+    const str = v => (Array.isArray(v) ? v.join(' ') : (v == null ? '' : String(v)));
     results = results.filter(h =>
-      h.name.toLowerCase().includes(term) ||
-      h.sanskrit.toLowerCase().includes(term) ||
-      (h.commonNames || []).some(n => n.toLowerCase().includes(term)) ||
-      h.family.toLowerCase().includes(term) ||
-      (h.primaryUses || []).some(u => u.toLowerCase().includes(term)) ||
-      (h.healthConditions || []).some(c => c.toLowerCase().includes(term)) ||
-      (h.formulations || []).some(f => f.toLowerCase().includes(term))
+      str(h.name).toLowerCase().includes(term) ||
+      str(h.sanskrit).toLowerCase().includes(term) ||
+      str(h.commonNames).toLowerCase().includes(term) ||
+      str(h.family).toLowerCase().includes(term) ||
+      str(h.primaryUses).toLowerCase().includes(term) ||
+      str(h.healthConditions).toLowerCase().includes(term) ||
+      str(h.formulations).toLowerCase().includes(term)
     );
   }
   if (category && category !== 'all') results = results.filter(h => h.category === category);
@@ -1062,6 +1221,89 @@ app.get('/sitemap.xml', (req, res) => {
   res.type('application/xml');
   res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>`);
 });
+
+// ---------- LIVE HEALTH UPDATES (SSE) ----------
+const LIVE = (() => {
+  const tips = [
+    'Drink warm water with lemon first thing in the morning to kindle Agni (digestive fire).',
+    'Practice Nadi Shodhana (alternate-nostril breathing) for 5 minutes to balance Vata.',
+    'Sleep before 10 PM — Ayurveda says the Kapha window (6–10 PM) is best for deep rest.',
+    'Chew food 32 times; proper chewing is the first stage of digestion in Ayurveda.',
+    'A teaspoon of Triphala at night supports natural detoxification and regular elimination.',
+    'Abhyanga (self-oil massage) with sesame oil improves circulation and calms the nervous system.',
+    'Favor seasonal, locally grown foods — eating with the rhythm of nature balances the doshas.',
+    'Sip ginger tea after meals to enhance digestion and reduce bloating.',
+    'A 10-minute walk post-dinner aids glucose metabolism and better sleep.',
+    'Golden milk (turmeric + warm milk) is a classic Rasayana for immunity and joints.'
+  ];
+  const outbreaks = [
+    { region: 'Northern India', alert: 'Seasonal flu & sore throat on the rise — boost immunity with Tulsi & Amla.', level: 'moderate' },
+    { region: 'Southeast Asia', alert: 'Dengue preparedness: keep surroundings mosquito-free; use neem oil repellent.', level: 'high' },
+    { region: 'Europe', alert: 'Cold-season respiratory care: steam inhalation with eucalyptus advised.', level: 'low' },
+    { region: 'Gulf region', alert: 'Heat-related dehydration: increase coconut water & buttermilk intake.', level: 'moderate' },
+    { region: 'North America', alert: 'Allergy season: Neti pot with saline eases sinus congestion.', level: 'low' },
+    { region: 'Global', alert: 'WHO flags rising stress & sleep disorders — daily Yoga Nidra recommended.', level: 'moderate' }
+  ];
+  const newsTemplates = [
+    'Study: {herb} shown to support healthy {cond} management in recent clinical review.',
+    'Ayurveda integration grows in {country} hospitals as complementary care.',
+    'New Panchakarma retreat launches in {state}, India — bookings open worldwide.',
+    'Research highlights {herb} for {cond}; practitioners report positive outcomes.',
+    'Tele-Ayurveda consultations up {pct}% — patients consult verified doctors online.',
+    'WHO recognizes traditional medicine; Ayurveda gets global policy boost.',
+    'Yoga declared among top evidence-based therapies for {cond} by health bodies.',
+    'Seasonal wellness: {cond} cases rise — Ayurvedic diet & herbs recommended.'
+  ];
+  const countries = ['India','United States','United Kingdom','Canada','Australia','Germany','Singapore'];
+  const states = ['Kerala','Maharashtra','Karnataka','Tamil Nadu','Rajasthan','Uttarakhand'];
+  let tick = 0;
+  function rand(a){ return a[Math.floor(Math.random()*a.length)]; }
+  function buildSnapshot() {
+    const DB = store.get();
+    const verified = DB.registeredDoctors.filter(d=>d.verified).length;
+    const online = DB.registeredDoctors.filter(d=>d.lastSeen && Date.now()-d.lastSeen < 15*60000).length;
+    const alert = rand(outbreaks);
+    const tip = tips[tick % tips.length];
+    const herbNames = ['Ashwagandha','Turmeric','Triphala','Brahmi','Guduchi','Neem','Tulsi','Shatavari'];
+    const conds = ['diabetes','arthritis','anxiety','PCOS','thyroid','digestion','immunity'];
+    const news = newsTemplates.map(t => t.replace('{herb}', rand(herbNames)).replace('{country}', rand(countries)).replace('{state}', rand(states)).replace('{cond}', rand(conds)).replace('{pct}', Math.floor(20+Math.random()*60)));
+    return {
+      tick: tick++,
+      ts: Date.now(),
+      tip,
+      alert,
+      news,
+      stats: {
+        doctors: doctors.length,
+        verifiedRegistered: verified,
+        onlineDoctors: online,
+        herbs: herbs.length,
+        hospitals: hospitals.length,
+        conditions: 51,
+        consultsToday: DB.bookings.length,
+        reviews: DB.reviews.length
+      }
+    };
+  }
+  const subscribers = new Set();
+  function broadcast() {
+    const snap = buildSnapshot();
+    const payload = 'data: ' + JSON.stringify(snap) + '\n\n';
+    subscribers.forEach(s => { try { s.res.write(payload); } catch(e){ subscribers.delete(s); } });
+  }
+  setInterval(broadcast, 7000); // push a fresh snapshot every 7s
+  return { subscribers, buildSnapshot, broadcast };
+})();
+app.get('/api/live/stream', (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders();
+  res.write('data: ' + JSON.stringify(LIVE.buildSnapshot()) + '\n\n');
+  const sub = { res };
+  LIVE.subscribers.add(sub);
+  const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch(e){} }, 25000);
+  req.on('close', () => { clearInterval(ping); LIVE.subscribers.delete(sub); });
+});
+app.get('/api/live/snapshot', (req, res) => res.json(LIVE.buildSnapshot()));
 
 // ---------- CATCH-ALL for SPA ----------
 app.get('*', (req, res) => {
