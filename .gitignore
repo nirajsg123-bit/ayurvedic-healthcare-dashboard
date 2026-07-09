@@ -1,1 +1,14 @@
 .vercel
+node_modules
+*.log
+psout.log
+server.log
+watchdog.log
+ayurvedic-watchdog.vbs
+install-task.bat
+launcher.bat
+restart.bat
+run-detached.bat
+_bot_block.html
+_botcheck.js
+.DS_Store
