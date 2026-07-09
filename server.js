@@ -965,7 +965,7 @@ app.get('/api/analytics', (req, res) => {
 function seededFor(seed) { let s = seed; return function () { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
 
 // ---------- SEO: robots.txt & sitemap.xml (BEFORE catch-all) ----------
-const SITE = 'https://ayurveda-india.health';
+const SITE = 'https://ayurvedic-healthcare-dashboard.vercel.app';
 app.get('/robots.txt', (req, res) => {
   res.type('text/plain');
   res.send(`User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${SITE}/sitemap.xml\n`);
