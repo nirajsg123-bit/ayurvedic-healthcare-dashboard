@@ -1,0 +1,6 @@
+Collecting real hospital articles...
+Unique hospital articles: 124
+Batch-enriching infoboxes (real contact data)...
+With infobox data: 104
+Wrote 104 REAL hospitals to D:\ayurvedic-healthcare-dashboard\data\hospitals_ingested.json
+  with phone: 0 | with website: 15 | ayurvedic: 3

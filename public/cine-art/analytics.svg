@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid slice" width="1200" height="500">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#04203a"/><stop offset="0.55" stop-color="#0a4a7a"/><stop offset="1" stop-color="#06203a"/></linearGradient></defs><rect width="1200" height="500" fill="url(#g)"/>
+     <circle cx="600" cy="250" r="60" fill="#9fe0ff" opacity="0.4"/>
+     <!-- bar chart -->
+     <g fill="#3fa7d6" opacity="0.9">
+       <rect x="120" y="398.473857994412" width="56" height="61.52614200558799" rx="4"/><rect x="220" y="350.1313120825828" width="56" height="109.86868791741725" rx="4"/><rect x="320" y="256.9621719685207" width="56" height="203.0378280314793" rx="4"/><rect x="420" y="363.224274927389" width="56" height="96.775725072611" rx="4"/><rect x="520" y="310.38870462700197" width="56" height="149.61129537299803" rx="4"/><rect x="620" y="302.95866602238203" width="56" height="157.04133397761797" rx="4"/><rect x="720" y="226.29983817520545" width="56" height="233.70016182479455" rx="4"/><rect x="820" y="221.38021067780454" width="56" height="238.61978932219546" rx="4"/><rect x="920" y="337.2008618606259" width="56" height="122.79913813937415" rx="4"/><rect x="1020" y="334.8852915386135" width="56" height="125.11470846138648" rx="4"/>
+     </g>
+     <polyline points="148,135.38540052966468 248,222.42670207397393 348,265.5817572798495 448,172.5946024305162 548,277.4830496858261 648,217.61606967896972 748,233.2830944439783 848,208.96831994362563 948,150.5532925159453 1048,269.1873154925123" fill="none" stroke="#bff0ff" stroke-width="4" opacity="0.9"/>
+     <rect width="1200" height="500" fill="url(#vig)"/>
+  <radialGradient id="vig" cx="50%" cy="42%" r="75%">
+    <stop offset="55%" stop-color="#000" stop-opacity="0"/>
+    <stop offset="100%" stop-color="#000" stop-opacity="0.55"/></radialGradient></svg>

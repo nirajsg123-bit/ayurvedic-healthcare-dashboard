@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid slice" width="1200" height="500">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#16063a"/><stop offset="0.55" stop-color="#4a1f7a"/><stop offset="1" stop-color="#100a30"/></linearGradient></defs><rect width="1200" height="500" fill="url(#g)"/>
+     <circle cx="600" cy="230" r="80" fill="#d9b6ff" opacity="0.45"/>
+     <!-- neural nodes -->
+     <g stroke="#c79bff" stroke-width="2" opacity="0.7" fill="none">
+       <line x1="200.80142021216517" y1="219.4695058602232" x2="873.9849927714024" y2="315.77350896120697"/><line x1="355.3651110061282" y1="171.42067999645167" x2="717.3687003633793" y2="265.7470073158606"/><line x1="359.9519576690867" y1="262.55254434074857" x2="770.6127349616088" y2="338.23649975854744"/><line x1="290.85144190623026" y1="290.18411801205207" x2="774.4714285593813" y2="191.29979752064673"/><line x1="325.6969295096104" y1="338.29426802149703" x2="761.7626373012376" y2="194.64512190066517"/><line x1="350.5637844794261" y1="275.5257457147938" x2="811.2082285393068" y2="226.6970601289985"/><line x1="247.48958807787372" y1="307.50682482379807" x2="717.2048135740705" y2="311.3017394027215"/><line x1="398.33414154049666" y1="151.91687112763378" x2="716.8530421410003" y2="199.0792637919445"/>
+     </g>
+     <g fill="#e6ccff">
+       <circle cx="501" cy="198" r="9"/><circle cx="245" cy="357" r="6"/><circle cx="529" cy="134" r="7"/><circle cx="253" cy="121" r="8"/><circle cx="662" cy="176" r="6"/><circle cx="976" cy="283" r="7"/><circle cx="556" cy="276" r="8"/><circle cx="802" cy="365" r="6"/><circle cx="278" cy="276" r="7"/><circle cx="207" cy="167" r="6"/><circle cx="473" cy="210" r="5"/><circle cx="933" cy="189" r="7"/>
+     </g>
+     <rect width="1200" height="500" fill="url(#vig)"/>
+  <radialGradient id="vig" cx="50%" cy="42%" r="75%">
+    <stop offset="55%" stop-color="#000" stop-opacity="0"/>
+    <stop offset="100%" stop-color="#000" stop-opacity="0.55"/></radialGradient></svg>

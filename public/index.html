@@ -655,6 +655,7 @@ body {
     @keyframes toastIn { from { transform: translateY(10px); opacity:0;} to {transform:translateY(0);opacity:1;} }
     .badge-danger { background:#fee2e2; color:#dc2626; }
   </style>
+<link rel="stylesheet" href="cine.css?v=2">
 </head>
 <body>
 
@@ -698,6 +699,7 @@ body {
       <button class="nav-tab" data-section="analytics">📊 Analytics</button>
       <button class="nav-tab" data-section="appointments">📅 Appointments</button>
       <button class="nav-tab" data-section="tracker">📈 Tracker</button>
+      <button class="nav-tab" data-section="ailab">🤖 AI Lab</button>
     </nav>
   </div>
 </header>
@@ -1265,8 +1267,22 @@ body {
       <button class="modal-close" onclick="closeModal()">×</button>
     </div>
     <div id="modal-body"></div>
-  </div>
-</div>
+      </div>
+    </div>
+
+    <!-- AI LAB SECTION (additive: server-side free-AI tools + cinematic) -->
+    <section id="section-ailab" class="section hidden">
+      <div class="search-panel">
+        <h2 class="search-title">🤖 AyurAI Lab — 60+ Free AI Tools</h2>
+        <p class="section-desc">Real, key-less AI over the platform's live data — diagnosis, plans, dosha quizzes, recipes, triage, near-me finder, TTS, speech input and more. No API key required.</p>
+        <div id="ai-lab-hub"></div>
+        <div id="ai-tool-body" style="margin-top:16px;"></div>
+      </div>
+    </section>
+
+    <script src="cine.js?v=2"></script>
+    <script src="ai-ui.js?v=4"></script>
+    <script src="ai-extra.js?v=2"></script>
 
 <script>
 // ============================================================
@@ -1294,6 +1310,9 @@ async function init() {
   loadAnalyticsMeta();
   loadAppointmentMeta();
   loadTrackerMeta();
+  // AyurAI additive: cinematic banners + server-side AI Lab
+  try { if (window.injectCinematicBanners) window.injectCinematicBanners(); } catch (e) {}
+  try { if (window.initAILab) window.initAILab(); } catch (e) {}
 }
 
 // Theme System

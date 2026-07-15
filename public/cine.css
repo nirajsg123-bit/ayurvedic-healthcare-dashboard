@@ -1,0 +1,79 @@
+/* ============================================================
+   AyurAI — Cinematic Visual Engine (100% offline, free, no keys)
+   ------------------------------------------------------------
+   Every section gets a living "cinematic video" backdrop:
+   • filmic gradient + drifting aurora/bokeh layers (Ken Burns motion)
+   • animated film grain + vignette + cinematic letterbox bars
+   • unique colour grade per section (herbs=emerald, yoga=saffron,
+     therapies=indigo, health=crimson, commercial=gold, etc.)
+   No external images/videos are loaded, so nothing ever breaks.
+   ============================================================ */
+.cine-banner{
+  position:relative; width:100%; min-height:230px; overflow:hidden;
+  border-radius:18px; margin:0 0 18px; isolation:isolate;
+  display:flex; align-items:flex-end;
+  box-shadow:0 18px 50px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.06);
+  background:#0b0f0c;
+}
+.cine-banner::before{ /* base filmic gradient */
+  content:""; position:absolute; inset:-10%;
+  background:var(--cine-grade, linear-gradient(135deg,#0c1f12,#06210f 60%,#0a1d10));
+  filter:saturate(1.15); transform:scale(1.05);
+  animation:cineDrift 26s ease-in-out infinite alternate;
+  z-index:0;
+}
+.cine-art{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:1;
+  opacity:.92; mix-blend-mode:screen; transform:scale(1.08);
+  animation:cineArtDrift 30s ease-in-out infinite alternate; filter:saturate(1.08) contrast(1.05); }
+@keyframes cineArtDrift{ 0%{transform:scale(1.08) translate(0,0)} 100%{transform:scale(1.22) translate(-2%,-2%)} }
+.cine-banner::after{ /* vignette */
+  content:""; position:absolute; inset:0;
+  background:radial-gradient(120% 90% at 50% 25%,transparent 40%,rgba(0,0,0,.55) 100%);
+  z-index:3; pointer-events:none;
+}
+.cine-layer{ position:absolute; inset:-15%; z-index:1; mix-blend-mode:screen; opacity:.55;
+  background-repeat:repeat; background-size:340px 340px;
+  animation:cineFloat 30s linear infinite; }
+.cine-layer.b{ animation-duration:44s; animation-direction:reverse; opacity:.4; }
+.cine-layer.c{ animation-duration:60s; opacity:.3; }
+/* drifting bokeh orbs */
+.cine-orb{ position:absolute; border-radius:50%; filter:blur(14px); z-index:2; mix-blend-mode:screen;
+  background:radial-gradient(circle at 30% 30%,rgba(255,255,255,.9),rgba(255,255,255,0) 60%);
+  animation:cineOrb 18s ease-in-out infinite; }
+/* film grain */
+.cine-grain{ position:absolute; inset:-50%; z-index:4; pointer-events:none; opacity:.07;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  animation:cineGrain .6s steps(2) infinite; }
+/* letterbox bars */
+.cine-banner > .cine-bars{ position:absolute; left:0; right:0; height:26px; background:#000; z-index:5; }
+.cine-banner > .cine-bars.top{ top:0; } .cine-banner > .cine-bars.bottom{ bottom:0; }
+.cine-caption{ position:relative; z-index:6; padding:42px 30px 30px; color:#fff; max-width:760px; }
+.cine-caption .cine-kicker{ font-size:11px; letter-spacing:.28em; text-transform:uppercase;
+  color:rgba(255,255,255,.7); display:flex; align-items:center; gap:10px; }
+.cine-caption .cine-kicker::before{ content:""; width:26px; height:1px; background:currentColor; opacity:.6; }
+.cine-caption h2{ font-size:clamp(22px,3.4vw,40px); margin:10px 0 6px; line-height:1.05;
+  text-shadow:0 2px 18px rgba(0,0,0,.6); font-weight:800; }
+.cine-caption p{ font-size:14px; color:rgba(255,255,255,.82); margin:0; text-shadow:0 1px 8px rgba(0,0,0,.6); }
+
+@keyframes cineDrift{ 0%{transform:scale(1.05) translate(0,0) rotate(0)} 100%{transform:scale(1.18) translate(-2%, -2%) rotate(.6deg)} }
+@keyframes cineFloat{ 0%{transform:translate(0,0)} 50%{transform:translate(-40px,-30px)} 100%{transform:translate(0,0)} }
+@keyframes cineOrb{ 0%,100%{transform:translateY(0) scale(1); opacity:.5} 50%{transform:translateY(-26px) scale(1.15); opacity:.85} }
+@keyframes cineGrain{ 0%{transform:translate(0,0)} 100%{transform:translate(-12px,8px)} }
+
+@media (prefers-reduced-motion: reduce){
+  .cine-banner::before,.cine-layer,.cine-orb,.cine-grain{ animation:none!important; }
+}
+
+/* ---- per-section colour grades + decorative motifs ---- */
+#section-doctors   .cine-banner{ --cine-grade:linear-gradient(135deg,#06303a,#0a4a52 55%,#0b2a30); }
+#section-hospitals .cine-banner{ --cine-grade:linear-gradient(135deg,#1a1030,#2e1d54 55%,#120a26); }
+#section-herbs     .cine-banner{ --cine-grade:linear-gradient(135deg,#06210f,#0f3d1d 55%,#082a16); }
+#section-therapies .cine-banner{ --cine-grade:linear-gradient(135deg,#101a3a,#26327a 55%,#0c1330); }
+#section-yoga      .cine-banner{ --cine-grade:linear-gradient(135deg,#3a2206,#7a4410 55%,#2a1605); }
+#section-health    .cine-banner{ --cine-grade:linear-gradient(135deg,#3a0612,#7a1024 55%,#2a0810); }
+#section-analytics .cine-banner{ --cine-grade:linear-gradient(135deg,#04203a,#0a4a7a 55%,#06203a); }
+#section-appointments .cine-banner{ --cine-grade:linear-gradient(135deg,#0a2a2e,#0f5a55 55%,#08302c); }
+#section-tracker   .cine-banner{ --cine-grade:linear-gradient(135deg,#1a2a06,#3d6a10 55%,#122606); }
+#section-ailab     .cine-banner{ --cine-grade:linear-gradient(135deg,#16063a,#4a1f7a 55%,#100a30); }
+#section-commercial .cine-banner{ --cine-grade:linear-gradient(135deg,#2a1c02,#7a5a10 55%,#1f1402); }
+#section-compare   .cine-banner{ --cine-grade:linear-gradient(135deg,#04203a,#0a4a6a 40%,#3a2206 100%); }

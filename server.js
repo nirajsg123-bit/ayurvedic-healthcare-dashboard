@@ -106,6 +106,19 @@ console.log('  Appointments:', appointments.length);
 console.log('  Health tracker entries:', healthTracker.length);
 console.log('  Favorites:', favorites.length);
 
+// ---------- AyurAI free-AI tooling (additive: server-side tools + features registry) ----------
+const createEngine = require('./ai/engine');
+const mountAI = require('./ai/router');
+const mountNewTools = require('./ai/newTools');
+const mountWorldClass = require('./ai/worldClass');
+const engine = createEngine({
+  datasets: { doctors, hospitals, herbs, therapies, yoga, healthBenefits },
+  getBySection: (s) => ({ doctors, hospitals, herbs, therapies, yoga, healthBenefits }[s]),
+  corpusCap: { herbs: 30000, doctors: 2000, hospitals: 0 }
+});
+mountAI(app, engine, { datasets: { doctors, hospitals, herbs, therapies, yoga, healthBenefits } });
+mountNewTools(app, engine, { datasets: { doctors, hospitals, herbs, therapies, yoga, healthBenefits } });
+mountWorldClass(app, engine, { datasets: { doctors, hospitals, herbs, therapies, yoga, healthBenefits } });
 // ---------- STATIC FILES (root URL) ----------
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -761,8 +774,8 @@ app.get('/api/search', (req, res) => {
   const herbResults = herbs.filter(h =>
     h.name.toLowerCase().includes(term) ||
     h.sanskrit.toLowerCase().includes(term) ||
-    (h.commonNames || []).some(n => n.toLowerCase().includes(term)) ||
-    (h.primaryUses || []).some(u => u.toLowerCase().includes(term))
+    (Array.isArray(h.commonNames) ? h.commonNames : (h.commonNames ? String(h.commonNames).split(',') : [])).some(n => String(n).toLowerCase().includes(term)) ||
+    (Array.isArray(h.primaryUses) ? h.primaryUses : (h.primaryUses ? String(h.primaryUses).split(',') : [])).some(u => String(u).toLowerCase().includes(term))
   ).slice(0, 20);
 
   const therapyResults = therapies.filter(t =>
