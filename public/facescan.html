@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Face Skin Lab — Ayurvedic Skin Analysis (Free On-Device AI)</title>
+<style>
+  :root{
+    --primary:#2d5016; --primary-light:#4a7c2e; --primary-dark:#1a3009;
+    --bg:#faf7f0; --card:#ffffff; --text:#1f2937; --text-light:#6b7280; --border:#e5e7eb;
+  }
+  [data-theme="dark"]{ --primary:#4ade80; --primary-light:#86efac; --primary-dark:#22c55e; --bg:#111827; --card:#1f2937; --text:#f9fafb; --text-light:#9ca3af; --border:#374151; }
+  [data-theme="sanskrit"]{ --primary:#1b5e20; --primary-light:#2e7d32; --primary-dark:#0d3d0f; --bg:#f5f0e1; --card:#fdfbf7; --text:#1a1a1a; --text-light:#5b5141; --border:#e6dcc6; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+  header{background:linear-gradient(135deg,var(--primary-dark),var(--primary));color:#fff;padding:18px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{margin:0;font-size:20px}
+  header .sub{opacity:.85;font-size:13px}
+  a.back{color:#fff;opacity:.9;font-size:13px;text-decoration:none;margin-left:auto;border:1px solid rgba(255,255,255,.5);padding:6px 12px;border-radius:8px}
+  a.back:hover{background:rgba(255,255,255,.15)}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 16px 60px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:880px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,.04)}
+  .card h2{margin:0 0 12px;font-size:16px;display:flex;align-items:center;gap:8px}
+  .pill{font-size:11px;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35)}
+  video,canvas{width:100%;border-radius:10px;background:#000;display:block;aspect-ratio:4/3;object-fit:cover}
+  .stage{position:relative}
+  .stage canvas{position:absolute;inset:0;pointer-events:none}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+  button{font:inherit;cursor:pointer;border:none;border-radius:10px;padding:10px 16px;font-weight:600;background:var(--primary);color:#fff;transition:.15s}
+  button:hover{filter:brightness(1.08)}
+  button.sec{background:var(--border);color:var(--text)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .status{font-size:12px;color:var(--text-light);margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .dot{width:9px;height:9px;border-radius:50%;background:#f59e0b;display:inline-block}
+  .dot.live{background:#22c55e}.dot.err{background:#ef4444}
+  .score-big{font-size:46px;font-weight:800;text-align:center;color:var(--primary)}
+  .score-sub{text-align:center;color:var(--text-light);font-size:13px;margin-bottom:10px}
+  .defect{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
+  .defect:last-child{border-bottom:none}
+  .defect .nm{flex:1;font-size:14px}
+  .bar{height:8px;border-radius:6px;background:var(--border);overflow:hidden;width:120px}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,#f59e0b,#ef4444)}
+  .sev{font-size:12px;color:var(--text-light);width:54px;text-align:right}
+  .tabs{display:flex;gap:6px;margin-bottom:14px}
+  .tabs button{background:var(--border);color:var(--text);padding:8px 14px;font-size:13px}
+  .tabs button.active{background:var(--primary);color:#fff}
+  .panel{display:none}
+  .panel.active{display:block}
+  .chip{display:inline-block;background:var(--bg);border:1px solid var(--border);border-radius:999px;padding:5px 11px;margin:4px 4px 0 0;font-size:12px}
+  .rec{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)}
+  .rec:last-child{border-bottom:none}
+  .rec .ic{font-size:22px;width:34px;text-align:center}
+  .rec .rb h4{margin:0 0 3px;font-size:14px}
+  .rec .rb p{margin:0;font-size:12.5px;color:var(--text-light)}
+  .note{font-size:12px;color:var(--text-light);background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px}
+  .ev{font-size:11px;color:var(--text-light)}
+  .full{grid-column:1/-1}
+  textarea{width:100%;height:260px;font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--bg);color:var(--text);resize:vertical}
+  .empty{color:var(--text-light);font-size:13px;text-align:center;padding:24px 8px}
+  .footer-note{font-size:12px;color:var(--text-light);background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-top:18px;line-height:1.55}
+  .footer-note b{color:var(--primary)}
+  .snap{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);align-items:flex-start}
+  .snap:last-child{border-bottom:none}
+  .snap .sc{font-size:30px;font-weight:800;color:var(--primary);width:62px;text-align:center;flex:none}
+  .snap .sb h4{margin:0 0 3px;font-size:14px}
+  .snap .sb p{margin:0;font-size:12.5px;color:var(--text-light)}
+  .snap .sa{margin-left:auto;display:flex;flex-direction:column;gap:6px;flex:none}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🌿 Face Skin Lab</h1>
+    <div class="sub">Free on-device AI · live camera · Ayurvedic skin advice</div>
+  </div>
+  <span class="pill" id="modelPill">AI engine: loading…</span>
+  <a class="back" href="/">← Back to Dashboard</a>
+</header>
+
+<div class="wrap">
+  <!-- LEFT: camera -->
+  <div class="card">
+    <h2>📷 Live Camera <span class="pill" id="camPill" style="background:var(--border);color:var(--text);border:none">off</span></h2>
+    <div class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="controls">
+      <button id="btnStart">Start Camera</button>
+      <button id="btnAnalyze" class="sec" disabled>Analyze Skin</button>
+      <button id="btnFaceAI" class="sec" disabled>Enable Face AI</button>
+      <button id="btnStop" class="sec" disabled>Stop</button>
+    </div>
+    <div class="status">
+      <span class="dot" id="cdnDot"></span>
+      <span id="cdnText">Loading free models (TensorFlow.js)… works offline via pixel analysis regardless.</span>
+    </div>
+    <div class="note">Privacy: all processing runs 100% in your browser. No video leaves your device. Best results in good, even lighting facing the camera.</div>
+  </div>
+
+  <!-- RIGHT: results -->
+  <div class="card">
+    <h2>🔬 Skin Analysis</h2>
+    <div class="score-big" id="scoreBig">—</div>
+    <div class="score-sub" id="scoreSub">Start the camera and click “Analyze Skin”</div>
+    <div id="defectList"><div class="empty">No analysis yet.</div></div>
+    <div class="controls" style="margin-top:14px">
+      <button id="btnAuto" class="sec" disabled>Auto every 3s</button>
+      <button id="btnSave" class="sec" disabled>💾 Save Scan</button>
+    </div>
+  </div>
+
+  <!-- ADVICE -->
+  <div class="card full">
+    <h2>🪔 Ayurvedic Advice</h2>
+    <div class="tabs">
+      <button data-tab="herbs" class="active">Herbs</button>
+      <button data-tab="therapies">Therapies</button>
+      <button data-tab="lifestyle">Diet / Lifestyle / Yoga</button>
+      <button data-tab="saved">Saved Scans</button>
+      <button data-tab="report">Report</button>
+    </div>
+
+    <div class="panel active" id="tab-herbs">
+      <div id="herbList"><div class="empty">Analyze your face to get herb recommendations from the live herb library (1,568 herbs).</div></div>
+    </div>
+    <div class="panel" id="tab-therapies">
+      <div id="therapyList"><div class="empty">Analyze your face to get therapy recommendations.</div></div>
+    </div>
+    <div class="panel" id="tab-lifestyle">
+      <div id="lifeBox"><div class="empty">Analyze your face to get dosha-based diet, lifestyle & yoga guidance.</div></div>
+    </div>
+    <div class="panel" id="tab-saved">
+      <div id="savedList"><div class="empty">No saved scans yet. Run an analysis and click “Save Scan” to keep it in your favorites & this list.</div></div>
+    </div>
+    <div class="panel" id="tab-report">
+      <div class="controls" style="margin-bottom:10px">
+        <button id="btnCopy">Copy Report</button>
+        <button id="btnDownload" class="sec">Download .txt</button>
+      </div>
+      <textarea id="reportArea" placeholder="Your Ayurvedic skin report will appear here…"></textarea>
+    </div>
+  </div>
+
+  <div class="footer-note full">
+    <b>How to read your score:</b> 80–100 = healthy, balanced skin · 60–79 = minor imbalances to address · 40–59 = moderate issues · below 40 = significant concerns worth an Ayurvedic physician's review.
+    The score blends detected defect severity with overall tone evenness. <b>Detection is on-device and approximate</b> — lighting, camera quality and skin tone affect results, so treat readings as guidance, not diagnosis.
+    <br/><b>⚠️ Disclaimer:</b> This tool is educational only and is not a medical diagnosis. For persistent acne, rashes, pigmentation or any skin condition, consult a qualified Ayurvedic or allopathic physician.
+  </div>
+</div>
+
+<script>
+  // theme passthrough from parent dashboard
+  try { document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'light'); } catch(e){}
+</script>
+<script src="facescan-core.js?v=2"></script>
+<script src="facescan-advice.js?v=2"></script>
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const $ = id => document.getElementById(id);
+  let currentResult = null, currentAdvice = null, currentReport = '';
+
+  FaceScan.init(video, overlay);
+  // keep overlay sizing synced to displayed video
+  function sizeOverlay(){
+    overlay.width = video.clientWidth || 640;
+    overlay.height = video.clientHeight || 480;
+  }
+  window.addEventListener('resize', sizeOverlay);
+
+  // ---- CDN status pill ----
+  function setCDN(state){
+    const dot = $('cdnDot'), txt = $('cdnText'), pill = $('modelPill');
+    dot.className = 'dot' + (state==='live'?' live':state==='error'?' err':'');
+    if(state==='live'){ txt.textContent='Free AI models loaded (TensorFlow.js FaceMesh). Live landmark overlay active.'; pill.textContent='AI engine: LIVE'; }
+    else if(state==='error'){ txt.textContent='Online models unavailable (offline?) — using built-in pixel analysis. Everything still works.'; pill.textContent='AI engine: offline analysis'; }
+    else { pill.textContent='AI engine: loading…'; }
+  }
+  FaceScan.on('cdn', setCDN);
+  // initial probe
+  (async()=>{ const st=FaceScan.getModelState(); if(st.cdnStatus!=='loading') setCDN(st.cdnStatus); else setCDN('loading'); })();
+
+  // ---- camera ----
+  let faceAI = false, autoTimer = null;
+  $('btnStart').onclick = async ()=>{
+    try{
+      $('btnStart').disabled = true; $('btnStart').textContent='Starting…';
+      await FaceScan.startCamera();
+      sizeOverlay();
+      $('camPill').textContent='on'; $('camPill').style.background='#dcfce7'; $('camPill').style.color='#166534';
+      $('btnAnalyze').disabled=false; $('btnFaceAI').disabled=false; $('btnStop').disabled=false; $('btnAuto').disabled=false;
+      $('btnStart').textContent='Camera On';
+      FaceScan.startLive();
+    }catch(e){ alert('Camera error: '+e.message); $('btnStart').disabled=false; $('btnStart').textContent='Start Camera'; }
+  };
+  $('btnStop').onclick = ()=>{
+    FaceScan.stopLive(); FaceScan.stopCamera();
+    $('camPill').textContent='off'; $('camPill').style.background='var(--border)'; $('camPill').style.color='var(--text)';
+    $('btnStart').disabled=false; $('btnStart').textContent='Start Camera';
+    $('btnAnalyze').disabled=true; $('btnFaceAI').disabled=true; $('btnStop').disabled=true; $('btnAuto').disabled=true;
+    if(autoTimer){ clearInterval(autoTimer); autoTimer=null; $('btnAuto').textContent='Auto every 3s'; }
+  };
+  $('btnFaceAI').onclick = async ()=>{
+    $('btnFaceAI').disabled=true; $('btnFaceAI').textContent='Loading face AI…';
+    const ok = await FaceScan.enableFaceAI();
+    $('btnFaceAI').textContent = ok ? 'Face AI On' : 'Face AI (offline)';
+    if(ok) faceAI = true;
+  };
+
+  // ---- analyze ----
+  $('btnAnalyze').onclick = ()=> runAnalysis();
+  async function runAnalysis(){
+    if(!FaceScan.isCameraOn()) return;
+    const res = await FaceScan.capture({ skipModel:false });
+    renderResult(res);
+  }
+  function renderResult(res){
+    currentResult = res;
+    $('scoreBig').textContent = res.skinScore + '/100';
+    const ds = res.defects && res.defects.length ? ('Top issue: '+res.defects[0].label) : 'Balanced, healthy skin ✨';
+    $('scoreSub').textContent = ds + (res.modelUsed? ' · FaceMesh detected':' · pixel analysis');
+    const dl = $('defectList');
+    if(!res.defects.length){ dl.innerHTML = '<div class="empty">No significant skin defects detected. Keep up the good routine! 🌟</div>'; }
+    else {
+      dl.innerHTML = res.defects.map(d=>`<div class="defect"><div class="nm">${d.label}<div class="ev">${d.evidence}</div></div><div class="bar"><i style="width:${d.severity}%"></i></div><div class="sev">${d.severity}</div></div>`).join('');
+    }
+    $('btnSave').disabled = false;
+    buildAdvice(res);
+  }
+
+  // ---- advice ----
+  async function buildAdvice(res){
+    const data = await FaceAdvice.loadData();
+    const advice = await FaceAdvice.buildAdvice(res, data);
+    // herbs
+    const hl = $('herbList');
+    const herbs = advice.herbs.length?advice.herbs:advice.fallbackHerbs;
+    if(!herbs.length){ hl.innerHTML='<div class="empty">No specific herb match — see general rasayanas.</div>'; }
+    else hl.innerHTML = herbs.map(h=>`
+      <div class="rec"><div class="ic">🌿</div><div class="rb">
+        <h4>${h.name||h}${h.sanskrit?` <span class="ev">(${h.sanskrit})</span>`:''}</h4>
+        <p>${(h.primaryUses&&h.primaryUses.length)?h.primaryUses.slice(0,4).join(', '):(h.category||'')}${(h.doshaEffect)?' · dosha: '+h.doshaEffect:''}</p>
+      </div></div>`).join('');
+    // therapies
+    const tl = $('therapyList');
+    const ther = advice.therapies.length?advice.therapies:advice.fallbackTherapies;
+    if(!ther.length){ tl.innerHTML='<div class="empty">No specific therapy match.</div>'; }
+    else tl.innerHTML = ther.map(t=>`
+      <div class="rec"><div class="ic">💆</div><div class="rb">
+        <h4>${t.name||t}${t.sanskrit?` <span class="ev">(${t.sanskrit})</span>`:''}</h4>
+        <p>${(t.indications&&t.indications.length)?t.indications.slice(0,3).join(', '):(t.category||t.type||'')}</p>
+      </div></div>`).join('');
+    // lifestyle
+    const lb = $('lifeBox');
+    let html = `<p><strong>Primary dosha imbalance:</strong> <span class="chip">${advice.primaryDosha}</span>`;
+    if(advice.doshas.length>1) html += advice.doshas.slice(1).map(d=>`<span class="chip">${d}</span>`).join('');
+    html += '</p>';
+    html += '<p><strong>🍽️ Diet</strong></p>'+(advice.diet.length?advice.diet.map(d=>`<p style="margin:4px 0;font-size:13px">• ${d}</p>`).join('') : '<p class="ev">—</p>');
+    html += '<p><strong>🌞 Lifestyle</strong></p>'+(advice.lifestyle.length?advice.lifestyle.map(d=>`<p style="margin:4px 0;font-size:13px">• ${d}</p>`).join('') : '<p class="ev">—</p>');
+    html += '<p><strong>🧘 Yoga & Pranayama</strong></p>'+(advice.yoga.length?advice.yoga.map(y=>`<span class="chip">${y}</span>`).join('') : '<p class="ev">—</p>');
+    html += '<p class="note">⚠️ Educational guidance only — not a medical diagnosis. Consult a qualified Ayurvedic physician for persistent skin conditions.</p>';
+    lb.innerHTML = html;
+    // report
+    const report = FaceAdvice.toReport(advice);
+    $('reportArea').value = report;
+    currentAdvice = advice;
+    currentReport = report;
+  }
+
+  // ---- SAVE SCAN (hooks into dashboard Favorites + local history) ----
+  const HKEY = 'facescanHistory';
+  function uid(){ return 'fc_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+  function loadHistory(){ try { return JSON.parse(localStorage.getItem(HKEY) || '[]'); } catch(e){ return []; } }
+  function saveHistory(arr){ localStorage.setItem(HKEY, JSON.stringify(arr)); }
+
+  function snapshot(){
+    const res = currentResult, adv = currentAdvice;
+    if(!res) return null;
+    const topDef = (res.defects && res.defects.length) ? res.defects[0].label : 'Balanced skin';
+    const dosha = adv ? adv.primaryDosha : 'Pitta';
+    const id = uid();
+    const entry = {
+      id, ts: Date.now(),
+      score: res.skinScore,
+      defects: (res.defects||[]).map(d=>d.label + ' (' + d.severity + ')'),
+      dosha,
+      summary: 'Score ' + res.skinScore + '/100 · ' + topDef + ' · ' + dosha + ' imbalance',
+      report: currentReport
+    };
+    // 1) dashboard Favorites (same-origin shared localStorage)
+    try {
+      if (window.parent && window.parent !== window && window.parent.toggleFavorite) {
+        window.parent.toggleFavorite('facescan', id, 'Face Scan ' + res.skinScore + '/100', entry.summary);
+      } else if (window.toggleFavorite) {
+        window.toggleFavorite('facescan', id, 'Face Scan ' + res.skinScore + '/100', entry.summary);
+      }
+    } catch(e){ /* ignore */ }
+    // 2) local in-page history
+    const h = loadHistory(); h.unshift(entry); saveHistory(h.slice(0,50));
+    return entry;
+  }
+
+  $('btnSave').onclick = ()=>{
+    if(!currentResult){ alert('Run an analysis first.'); return; }
+    const e = snapshot();
+    if(!e){ return; }
+    $('btnSave').textContent = '✓ Saved';
+    setTimeout(()=>{ $('btnSave').textContent = '💾 Save Scan'; }, 1600);
+    renderSaved();
+    showToastSafe('Scan saved to Favorites & history 💾');
+  };
+
+  function showToastSafe(msg){
+    try { if (window.parent && window.parent.showToast) return window.parent.showToast(msg, 'success'); } catch(e){}
+    // lightweight fallback
+    let c = document.getElementById('__fc_toast');
+    if(!c){ c = document.createElement('div'); c.id='__fc_toast';
+      c.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:9999;background:#16a34a;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.2)';
+      document.body.appendChild(c); }
+    c.textContent = msg; c.style.display='block';
+    clearTimeout(c._t); c._t = setTimeout(()=>{ c.style.display='none'; }, 2600);
+  }
+
+  function renderSaved(){
+    const h = loadHistory();
+    const box = $('savedList');
+    if(!h.length){ box.innerHTML = '<div class="empty">No saved scans yet. Run an analysis and click “Save Scan” to keep it in your favorites & this list.</div>'; return; }
+    box.innerHTML = h.map(e=>`<div class="snap">
+      <div class="sc">${e.score}</div>
+      <div class="sb"><h4>Face Scan · ${new Date(e.ts).toLocaleString()}</h4>
+        <p>${e.summary}</p></div>
+      <div class="sa">
+        <button class="sec btn-sm" data-view="${e.id}">View Report</button>
+        <button class="sec btn-sm" data-del="${e.id}">Remove</button>
+      </div></div>`).join('');
+    box.querySelectorAll('[data-view]').forEach(b=> b.onclick=()=>{
+      const e2 = loadHistory().find(x=>x.id===b.dataset.view); if(!e2) return;
+      $('reportArea').value = e2.report || '';
+      // switch to report tab
+      document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+      const bt = document.querySelector('.tabs button[data-tab="report"]'); if(bt) bt.classList.add('active');
+      $('tab-report').classList.add('active');
+    });
+    box.querySelectorAll('[data-del]').forEach(b=> b.onclick=()=>{
+      const id = b.dataset.del;
+      saveHistory(loadHistory().filter(x=>x.id!==id));
+      // also drop from dashboard favorites if present
+      try {
+        const fk = JSON.parse(localStorage.getItem('favorites')||'[]').filter(f=>!(f.id===id && f.type==='facescan'));
+        localStorage.setItem('favorites', JSON.stringify(fk));
+      } catch(e){}
+      renderSaved();
+    });
+  }
+
+  // tabs
+  document.querySelectorAll('.tabs button').forEach(b=>{
+    b.onclick=()=>{
+      document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+      b.classList.add('active');
+      const tab = $('tab-'+b.dataset.tab);
+      tab.classList.add('active');
+      if(b.dataset.tab==='saved') renderSaved();
+    };
+  });
+
+  // auto
+  $('btnAuto').onclick = ()=>{
+    if(autoTimer){ clearInterval(autoTimer); autoTimer=null; $('btnAuto').textContent='Auto every 3s'; return; }
+    if(!FaceScan.isCameraOn()) return;
+    $('btnAuto').textContent='Stop Auto';
+    autoTimer = setInterval(()=>{ if(FaceScan.isCameraOn()) runAnalysis(); }, 3000);
+  };
+
+  // report actions
+  $('btnCopy').onclick = ()=>{ navigator.clipboard.writeText($('reportArea').value).then(()=>alert('Report copied to clipboard.')); };
+  $('btnDownload').onclick = ()=>{
+    const blob = new Blob([$('reportArea').value], {type:'text/plain'});
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='ayurvedic-face-skin-report.txt'; a.click();
+  };
+})();
+</script>
+</body>
+</html>

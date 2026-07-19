@@ -14,3 +14,4 @@ _botcheck.js
 .DS_Store
 data/store.json
 data/store.json.tmp
+.env*
