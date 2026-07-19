@@ -73,10 +73,27 @@
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       throw new Error('Camera API not available in this browser/context. Use https or localhost and grant permission.');
     }
-    S.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
+    // Try an ideal HD request first; fall back to a bare video constraint so ANY webcam works.
+    const tries = [
+      { video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+      { video: { facingMode: 'user' }, audio: false },
+      { video: true, audio: false }
+    ];
+    let lastErr = null;
+    for (const c of tries) {
+      try {
+        S.stream = await navigator.mediaDevices.getUserMedia(c);
+        break;
+      } catch (e) { lastErr = e; }
+    }
+    if (!S.stream) {
+      // Surface a clear, actionable reason.
+      const m = (lastErr && lastErr.message) || '';
+      if (/denied|NotAllowed/i.test(m)) throw new Error('Camera permission denied. Allow camera access in the address bar, then click Start Camera again.');
+      if (/NotFound|not found|Requested device/i.test(m)) throw new Error('No camera found. Connect a webcam and click Start Camera again.');
+      if (/secure|insecure|context/i.test(m)) throw new Error('Camera needs a secure context. Use https:// or http://localhost (not a file:// path).');
+      throw new Error('Could not start camera: ' + m);
+    }
     S.video.srcObject = S.stream;
     await new Promise(r => { S.video.onloadedmetadata = () => r(); });
     await S.video.play();
