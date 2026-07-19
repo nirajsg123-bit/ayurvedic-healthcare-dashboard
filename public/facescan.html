@@ -96,6 +96,7 @@
       <span class="dot" id="cdnDot"></span>
       <span id="cdnText">Loading free models (TensorFlow.js)… works offline via pixel analysis regardless.</span>
     </div>
+    <div id="camError" style="display:none;margin-top:10px;padding:10px 12px;border-radius:10px;background:#fef2f2;color:#b91c1c;font-size:13px;line-height:1.5;border:1px solid #fecaca;"></div>
     <div class="note">Privacy: all processing runs 100% in your browser. No video leaves your device. Best results in good, even lighting facing the camera.</div>
   </div>
 
@@ -183,9 +184,18 @@
   // initial probe
   (async()=>{ const st=FaceScan.getModelState(); if(st.cdnStatus!=='loading') setCDN(st.cdnStatus); else setCDN('loading'); })();
 
+  // visible camera error (instead of easy-to-miss alert)
+  function showCamError(msg){
+    const el = $('camError');
+    el.style.display='block';
+    el.innerHTML = '⚠️ ' + msg;
+  }
+  function clearCamError(){ const el=$('camError'); el.style.display='none'; el.innerHTML=''; }
+
   // ---- camera ----
   let faceAI = false, autoTimer = null;
   $('btnStart').onclick = async ()=>{
+    clearCamError();
     try{
       $('btnStart').disabled = true; $('btnStart').textContent='Starting…';
       await FaceScan.startCamera();
@@ -194,7 +204,15 @@
       $('btnAnalyze').disabled=false; $('btnFaceAI').disabled=false; $('btnStop').disabled=false; $('btnAuto').disabled=false;
       $('btnStart').textContent='Camera On';
       FaceScan.startLive();
-    }catch(e){ alert('Camera error: '+e.message); $('btnStart').disabled=false; $('btnStart').textContent='Start Camera'; }
+    }catch(e){
+      $('btnStart').disabled=false; $('btnStart').textContent='Start Camera';
+      let msg = e.message || String(e);
+      if (/not available/i.test(msg)) msg = 'Camera API unavailable. Open this page over <b>https://</b> or <b>http://localhost</b> (not a file:// path), and use a modern browser.';
+      else if (/denied|NotAllowed/i.test(msg)) msg = 'Camera permission <b>denied</b>. Click the camera icon in the browser address bar and allow access, then click “Start Camera” again.';
+      else if (/NotFound|not found|Requested device/i.test(msg)) msg = 'No camera found. Connect a webcam and click “Start Camera” again.';
+      else if (/secure|insecure|context/i.test(msg)) msg = 'Camera needs a <b>secure context</b>. Use https:// or http://localhost (not file://).';
+      showCamError(msg);
+    }
   };
   $('btnStop').onclick = ()=>{
     FaceScan.stopLive(); FaceScan.stopCamera();
